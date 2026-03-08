@@ -26,10 +26,10 @@ use tracing::debug;
 use crate::learning;
 
 /// Minimum number of recent messages to always keep in context.
-const MIN_RECENT_MESSAGES: usize = 4;
+const MIN_RECENT_MESSAGES: usize = 30;
 
 /// Maximum number of recent messages to keep before applying budget.
-const MAX_RECENT_MESSAGES: usize = 8;
+const MAX_RECENT_MESSAGES: usize = 60;
 
 /// Fraction of total budget reserved for memory search results.
 const MEMORY_BUDGET_FRACTION: f32 = 0.15;
