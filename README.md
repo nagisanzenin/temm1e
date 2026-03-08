@@ -28,7 +28,7 @@ No web dashboards. No config files to edit. Deploy, paste your API key in Telegr
 | **AGENTIC CORE modules** | 20 |
 | **Traits (core)** | 13 shared trait definitions |
 | **AI providers** | 6 (Anthropic, OpenAI, Gemini, Grok, OpenRouter, MiniMax) |
-| **Messaging channels** | 4 (Telegram, Discord, Slack, CLI) |
+| **Messaging channels** | 4 ([Telegram](docs/channels/telegram.md), [Discord](docs/channels/discord.md), [Slack](docs/channels/slack.md), [CLI](docs/channels/cli.md)) |
 | **Agent tools** | 7 (shell, browser, file ops, web fetch, git, messaging, file transfer) |
 | **Encryption** | ChaCha20-Poly1305 + Ed25519 |
 | **Memory backends** | 3 (SQLite, Markdown, failover) |
