@@ -2,6 +2,10 @@
   <img src="assets/banner.png" alt="SkyClaw" width="100%">
 </p>
 
+<p align="center">
+  Built with <a href="https://github.com/nagisanzenin/claude-code-production-grade-plugin">production-grade</a> — the Claude Code plugin for shipping real systems, not just code files.
+</p>
+
 # SkyClaw
 
 Cloud-native Rust AI agent runtime. 38K lines, 905 tests, zero warnings.
