@@ -7,6 +7,7 @@
 //! - **OpenRouter** (290+ models via OpenAI-compatible endpoint)
 //! - **MiniMax** (via OpenAI-compatible endpoint)
 //! - **Google Gemini** (via OpenAI-compatible endpoint)
+//! - **Z.ai / Zhipu AI** (GLM models via OpenAI-compatible endpoint)
 
 #![allow(dead_code)]
 
@@ -92,6 +93,17 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn Provider>, Sky
                 .with_extra_headers(config.extra_headers.clone());
             Ok(Box::new(provider))
         }
+        "zai" | "zhipu" => {
+            let base_url = config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.z.ai/api/paas/v4".to_string());
+            let provider = OpenAICompatProvider::new(api_key)
+                .with_keys(all_keys)
+                .with_base_url(base_url)
+                .with_extra_headers(config.extra_headers.clone());
+            Ok(Box::new(provider))
+        }
         "ollama" => {
             let base_url = config
                 .base_url
@@ -164,6 +176,18 @@ mod tests {
     #[test]
     fn create_minimax_provider() {
         let provider = create_provider(&config_with_name("minimax")).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_zai_provider() {
+        let provider = create_provider(&config_with_name("zai")).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_zhipu_provider() {
+        let provider = create_provider(&config_with_name("zhipu")).unwrap();
         assert_eq!(provider.name(), "openai-compatible");
     }
 

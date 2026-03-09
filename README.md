@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/version-1.6.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/tests-1130-green.svg" alt="1130 tests">
-  <img src="https://img.shields.io/badge/providers-6-red.svg" alt="6 providers">
+  <img src="https://img.shields.io/badge/providers-7-red.svg" alt="7 providers">
 </p>
 
 # SkyClaw
@@ -66,7 +66,7 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 | **Implemented features** | 49 across 9 phases |
 | **AGENTIC CORE modules** | 20 |
 | **Traits (core)** | 14 shared trait definitions |
-| **AI providers** | 6 (Anthropic, OpenAI, Gemini, Grok, OpenRouter, MiniMax) |
+| **AI providers** | 7 (Anthropic, OpenAI, Gemini, Grok, OpenRouter, Z.ai, MiniMax) |
 | **Messaging channels** | 4 ([Telegram](docs/channels/telegram.md), [Discord](docs/channels/discord.md), [Slack](docs/channels/slack.md), [CLI](docs/channels/cli.md)) |
 | **Agent tools** | 9 (shell, browser, file ops, web fetch, git, messaging, file transfer, memory manage, key manage) |
 | **Encryption** | ChaCha20-Poly1305 + Ed25519 + AES-256-GCM (OTK) |
@@ -125,7 +125,7 @@ export TELEGRAM_BOT_TOKEN="your-token-here"
 4. Copy the encrypted blob back to chat — SkyClaw decrypts and validates
 5. Or just paste a raw API key directly — SkyClaw auto-detects the provider
 
-Supports: Anthropic, OpenAI, Gemini, Grok, OpenRouter, MiniMax
+Supports: Anthropic, OpenAI, Gemini, Grok, OpenRouter, Z.ai, MiniMax
 
 ## Supported Providers
 
@@ -138,6 +138,7 @@ Paste any of these API keys in Telegram — SkyClaw detects the provider automat
 | `AIzaSy*` | Google Gemini | gemini-3-flash-preview |
 | `xai-*` | xAI Grok | grok-4-1-fast-non-reasoning |
 | `sk-or-*` | OpenRouter | anthropic/claude-sonnet-4-6 |
+| *(explicit: `zai:KEY`)* | Z.ai (Zhipu) | glm-4.7-flash |
 | *(config only)* | MiniMax | MiniMax-M2.5 |
 
 ## Channels

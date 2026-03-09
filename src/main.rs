@@ -237,7 +237,7 @@ fn detect_api_key(text: &str) -> Option<DetectedCredential> {
         if p != "http" && p != "https" {
             match p.as_str() {
                 "anthropic" | "openai" | "gemini" | "grok" | "xai" | "openrouter" | "minimax"
-                | "ollama" => {
+                | "zai" | "zhipu" | "ollama" => {
                     if key.len() >= 8 && !is_placeholder_key(key) {
                         return Some(DetectedCredential {
                             provider: match p.as_str() {
@@ -247,6 +247,7 @@ fn detect_api_key(text: &str) -> Option<DetectedCredential> {
                                 "grok" | "xai" => "grok",
                                 "openrouter" => "openrouter",
                                 "minimax" => "minimax",
+                                "zai" | "zhipu" => "zai",
                                 "ollama" => "ollama",
                                 _ => unreachable!(),
                             },
@@ -384,6 +385,7 @@ fn normalize_provider_name(name: &str) -> Option<&'static str> {
         "grok" | "xai" => Some("grok"),
         "openrouter" => Some("openrouter"),
         "minimax" => Some("minimax"),
+        "zai" | "zhipu" | "glm" => Some("zai"),
         "ollama" => Some("ollama"),
         _ => None,
     }
@@ -398,6 +400,7 @@ fn default_model(provider_name: &str) -> &'static str {
         "grok" | "xai" => "grok-4-1-fast-non-reasoning",
         "openrouter" => "anthropic/claude-sonnet-4-6",
         "minimax" => "MiniMax-M2.5",
+        "zai" => "glm-4.7-flash",
         "ollama" => "llama3.3",
         _ => "claude-sonnet-4-6",
     }
@@ -600,6 +603,7 @@ AIzaSy...      \u{2192} Gemini\n\
 xai-...        \u{2192} Grok\n\
 sk-or-...      \u{2192} OpenRouter\n\n\
 2\u{fe0f}\u{20e3} Explicit (for keys without unique prefix):\n\
+zai:YOUR_KEY\n\
 minimax:YOUR_KEY\n\
 openrouter:YOUR_KEY\n\
 ollama:YOUR_KEY\n\n\
@@ -665,6 +669,7 @@ fn build_system_prompt() -> String {
     prompt.push_str(
         "- openrouter: any model via anthropic/claude-sonnet-4-6, openai/gpt-5.2, etc.\n",
     );
+    prompt.push_str("- zai (zhipu): glm-4.7-flash, glm-4.7, glm-5, glm-5-code, glm-4.6v\n");
     prompt.push_str("- minimax: MiniMax-M2.5\n");
 
     // ── Current configuration ─────────────────────────────────
@@ -2822,6 +2827,19 @@ mod tests {
     }
 
     #[test]
+    fn explicit_zai_key() {
+        let result = detect_api_key("zai:24f7a8ebaa2f4cb1866b82b0670a5e6c.rPGt3alOjwddy4l1").unwrap();
+        assert_eq!(result.provider, "zai");
+        assert_eq!(result.api_key, "24f7a8ebaa2f4cb1866b82b0670a5e6c.rPGt3alOjwddy4l1");
+    }
+
+    #[test]
+    fn explicit_zhipu_key() {
+        let result = detect_api_key("zhipu:24f7a8ebaa2f4cb1866b82b0670a5e6c.rPGt3alOjwddy4l1").unwrap();
+        assert_eq!(result.provider, "zai");
+    }
+
+    #[test]
     fn explicit_format_case_insensitive() {
         let result = detect_api_key("MiniMax:eyJhbGciOiJSUzI1NiIsInR5cCI6");
         assert_eq!(result.unwrap().provider, "minimax");
@@ -2906,6 +2924,7 @@ mod tests {
         assert_eq!(default_model("xai"), "grok-4-1-fast-non-reasoning");
         assert_eq!(default_model("openrouter"), "anthropic/claude-sonnet-4-6");
         assert_eq!(default_model("minimax"), "MiniMax-M2.5");
+        assert_eq!(default_model("zai"), "glm-4.7-flash");
         assert_eq!(default_model("ollama"), "llama3.3");
     }
 
