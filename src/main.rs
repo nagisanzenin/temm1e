@@ -1860,6 +1860,79 @@ async fn main() -> Result<()> {
                                         return;
                                     }
 
+                                    // /help — list available commands
+                                    if cmd_lower == "/help" {
+                                        let help_text = "\
+Available commands:\n\n\
+/help — Show this help message\n\
+/addkey — Securely add an API key (encrypted OTK flow)\n\
+/addkey unsafe — Add an API key by pasting directly\n\
+/keys — List configured providers and active model\n\
+/model — Show current model and available models\n\
+/model <name> — Switch to a different model\n\
+/removekey <provider> — Remove a provider's API key\n\
+/usage — Show token usage and cost summary\n\
+/restart — Restart SkyClaw (server mode only)\n\n\
+Just type a message to chat with the AI agent.";
+                                        let reply = skyclaw_core::types::message::OutboundMessage {
+                                            chat_id: msg.chat_id.clone(),
+                                            text: help_text.to_string(),
+                                            reply_to: Some(msg.id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        send_with_retry(&*sender, reply).await;
+                                        is_heartbeat_clone.store(false, Ordering::Relaxed);
+                                        return;
+                                    }
+
+                                    // /restart — restart the SkyClaw process (server mode)
+                                    if cmd_lower == "/restart" {
+                                        tracing::info!(
+                                            chat_id = %msg.chat_id,
+                                            "Restart requested via /restart command"
+                                        );
+                                        let reply = skyclaw_core::types::message::OutboundMessage {
+                                            chat_id: msg.chat_id.clone(),
+                                            text: "Restarting SkyClaw... I'll be back in a few seconds.".to_string(),
+                                            reply_to: Some(msg.id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        send_with_retry(&*sender, reply).await;
+
+                                        // Spawn a delayed restart: wait for this process to exit,
+                                        // then start a new one. Cross-platform.
+                                        let exe = std::env::current_exe()
+                                            .unwrap_or_else(|_| std::path::PathBuf::from("skyclaw"));
+                                        let exe_str = exe.to_string_lossy().to_string();
+
+                                        #[cfg(unix)]
+                                        {
+                                            let _ = std::process::Command::new("sh")
+                                                .arg("-c")
+                                                .arg(format!("sleep 2 && \"{}\" start", exe_str))
+                                                .stdin(std::process::Stdio::null())
+                                                .stdout(std::process::Stdio::null())
+                                                .stderr(std::process::Stdio::null())
+                                                .spawn();
+                                        }
+                                        #[cfg(windows)]
+                                        {
+                                            use std::os::windows::process::CommandExt;
+                                            let _ = std::process::Command::new("cmd")
+                                                .args(["/C", &format!("timeout /t 2 /nobreak >nul && \"{}\" start", exe_str)])
+                                                .stdin(std::process::Stdio::null())
+                                                .stdout(std::process::Stdio::null())
+                                                .stderr(std::process::Stdio::null())
+                                                .creation_flags(0x00000008) // DETACHED_PROCESS
+                                                .spawn();
+                                        }
+
+                                        // Give the reply a moment to flush, then exit
+                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                        tracing::info!("Exiting for restart");
+                                        std::process::exit(0);
+                                    }
+
                                     // enc:v1: — encrypted blob from OTK flow
                                     if msg_text_cmd.trim().starts_with("enc:v1:") {
                                         let blob_b64 = &msg_text_cmd.trim()["enc:v1:".len()..];
@@ -2798,6 +2871,33 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => eprintln!("Failed to query usage: {}", e),
                     }
+                    eprint!("skyclaw> ");
+                    continue;
+                }
+
+                // /help — list available commands
+                if cmd_lower == "/help" {
+                    println!(
+                        "\nAvailable commands:\n\n\
+                         /help — Show this help message\n\
+                         /addkey — Securely add an API key (encrypted OTK flow)\n\
+                         /addkey unsafe — Add an API key by pasting directly\n\
+                         /keys — List configured providers and active model\n\
+                         /model — Show current model and available models\n\
+                         /model <name> — Switch to a different model\n\
+                         /removekey <provider> — Remove a provider's API key\n\
+                         /usage — Show token usage and cost summary\n\
+                         /quit — Exit the CLI chat\n\n\
+                         Just type a message to chat with the AI agent.\n"
+                    );
+                    eprint!("skyclaw> ");
+                    continue;
+                }
+
+                // /restart — not applicable in CLI mode
+                if cmd_lower == "/restart" {
+                    println!("\n/restart is only available in server mode (skyclaw start).");
+                    println!("In CLI mode, just exit and re-run: skyclaw chat\n");
                     eprint!("skyclaw> ");
                     continue;
                 }
