@@ -17,7 +17,7 @@
 
 # SkyClaw
 
-Hyper-performance Rust agent runtime with extreme resilience and continuous self-learning. Deploys once, stays up forever. Learns from every task, remembers across sessions, self-heals through failures. **v2.1: MCP self-extension — the agent discovers and installs new tools at runtime via Model Context Protocol.** 55K lines, 1266 tests, zero warnings, zero panic paths.
+Hyper-performance Rust agent runtime with extreme resilience and continuous self-learning. Deploys once, stays up forever. Learns from every task, remembers across sessions, self-heals through failures. **v2.1: MCP self-extension — the agent discovers and installs new tools at runtime via Model Context Protocol.** 55K lines, 1266 tests, zero warnings, zero panic paths. [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md).
 
 ## What It Does
 
@@ -86,7 +86,7 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 
 | Metric | Value |
 |--------|-------|
-| **Lines of Rust** | 55,354 across 118 source files |
+| **Lines of Rust** | 55,376 across 118 source files |
 | **Tests** | 1,266 passing, 0 failures |
 | **Clippy warnings** | 0 (CI gate: `-D warnings`) |
 | **Workspace crates** | 14 + 1 binary |
@@ -105,25 +105,29 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 | **Vision support** | JPEG, PNG, GIF, WebP (Anthropic + OpenAI formats) — graceful fallback on text-only models |
 | **Release profile** | `opt-level=z`, LTO, 1 codegen unit, stripped, `panic=unwind` |
 | **Minimum Rust version** | 1.82 (Edition 2021) |
-| **Binary size** | 7.1 MB (release, stripped, LTO) |
-| **Memory (idle)** | 14 MB RSS |
-| **Startup time** | < 1 second |
+| **Binary size** | 9.3 MB (release, stripped, LTO) |
+| **Memory (idle)** | 15 MB RSS ([measured](docs/benchmarks/BENCHMARK_REPORT.md)) |
+| **Memory (peak, 3-turn chat)** | 17 MB RSS |
+| **Startup time** | 31 ms cold start ([benchmarked](docs/benchmarks/BENCHMARK_REPORT.md)) |
 
 ## Performance
 
-SkyClaw is built for hyper-performance. Rust's zero-cost abstractions, async runtime, and aggressive release optimizations deliver server-grade capability at embedded-system resource usage.
+SkyClaw is built for hyper-performance. Rust's zero-cost abstractions, async runtime, and aggressive release optimizations deliver server-grade capability at embedded-system resource usage. All SkyClaw numbers are **measured** from a live 3-turn conversation test — see the [full benchmark report](docs/benchmarks/BENCHMARK_REPORT.md) with raw logs.
 
-| Metric | SkyClaw (Rust) | OpenClaw (TypeScript) |
-|--------|---------------|----------------------|
-| **Idle RAM** | 14 MB | ~1.2 GB |
-| **Active RAM** | ~20 MB | 8 – 12 GB |
-| **Binary / Install** | 7.1 MB single binary | 75 MB+ (npm + node_modules) |
-| **Startup** | < 1 second | ~10 seconds (Node.js cold start) |
-| **Long session (13h)** | Stable ~20 MB | 1.9 GB (memory accumulation) |
-| **Runtime** | Native arm64/x86_64 | Node.js |
-| **Dependencies** | 0 runtime deps (static binary) | npm ecosystem |
+| Metric | SkyClaw (Rust) | OpenClaw (TypeScript) | ZeroClaw (Rust) |
+|--------|---------------|----------------------|-----------------|
+| **Idle RAM** | **15 MB** | ~1,200 MB | ~4 MB |
+| **Peak RAM (3-turn chat)** | **17 MB** | ~1,500 MB+ | ~8 MB |
+| **Binary / Install** | **9.3 MB** single binary | ~800 MB (npm + node_modules) | ~12 MB |
+| **Cold start** | **31 ms** | ~8,000 ms | <10 ms |
+| **Gateway ready** | **1.4 s** (MCP-bound) | ~10 s | <100 ms |
+| **Runtime** | Native arm64/x86_64 | Node.js V8 | Native |
+| **Dependencies** | 0 runtime deps | npm ecosystem | 0 runtime deps |
+| **Memory under load** | Flat (15-17 MB) | Grows over time | Flat |
 
-85x lower idle memory. Single binary deployment. No runtime dependencies.
+**80x less memory than OpenClaw.** Runs on a 512 MB VPS where OpenClaw cannot even start (needs 1.5 GB minimum). Memory stays flat under load — no GC pauses, no accumulation, deterministic allocation.
+
+> **Methodology:** SkyClaw numbers measured on Apple Silicon (arm64), macOS Darwin 23.6.0, release build with LTO. RSS sampled every 2s via `ps`. OpenClaw/ZeroClaw numbers from published benchmarks ([source 1](https://juliangoldie.com/zeroclaw-vs-openclaw/), [source 2](https://zeroclaws.io/blog/zeroclaw-vs-openclaw-vs-picoclaw-2026/), [source 3](https://advenboost.com/en/openclaw-hardware-requirements/)). Full raw data: [`docs/benchmarks/`](docs/benchmarks/).
 
 ## 3-Step Setup
 
@@ -380,7 +384,7 @@ cargo build --release                                      # Release build
 ## Release Timeline
 
 ```
-2026-03-11  v2.1.0  ●━━━ MCP self-extension — Model Context Protocol client (skyclaw-mcp crate), self_extend_tool discovers servers by capability, self_add_mcp installs them at runtime, 14 built-in server registry, stdio + HTTP transports, hot-loading, auto-restart, tool name sanitization, /mcp commands, mcp_manage agent tool, 1266 tests
+2026-03-11  v2.1.0  ●━━━ MCP self-extension — Model Context Protocol client (skyclaw-mcp crate), self_extend_tool discovers servers by capability, self_add_mcp installs them at runtime, 14 built-in server registry, stdio + HTTP transports, hot-loading, auto-restart, tool name sanitization, /mcp commands, mcp_manage agent tool, performance benchmark report (15 MB idle, 31ms startup, 80x less RAM than OpenClaw), 1266 tests
                     │
 2026-03-11  v2.0.1  ●━━━ LLM chat/order classification — single LLM call classifies AND responds (chat = 1 call, order = instant ack + pipeline), abolished artificial tool iteration caps (budget + time are the guardrails), skyclaw update command, 1217 tests
                     │
