@@ -112,7 +112,50 @@ Replace the API key with the OAuth access token:
 Authorization: Bearer {access_token}
 ```
 
-This works with both `/v1/chat/completions` and `/v1/responses` endpoints. The token is a JWT that OpenAI validates server-side.
+The token is a JWT that OpenAI validates server-side.
+
+### Which API Endpoint? Responses API (NOT Chat Completions)
+
+**Critical finding:** Codex CLI deprecated `/v1/chat/completions` and fully removed it in February 2026. The **only supported wire protocol** is the Responses API (`/v1/responses`). The `wire_api` config defaults to `"responses"` and is the only accepted value.
+
+Codex-specific models (e.g., `gpt-5.3-codex`) are **only available via the Responses API** — they don't work with `/v1/chat/completions` at all.
+
+**Example API call with OAuth token:**
+```bash
+curl https://api.openai.com/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhb..." \
+  -d '{
+    "model": "gpt-5.3-codex",
+    "input": "Explain Rust ownership in one sentence."
+  }'
+```
+
+The Responses API has a different request/response shape than Chat Completions:
+- **Input:** Uses `input` field (string or array of items) instead of `messages` array
+- **Output:** Returns items instead of choices/messages
+- **State:** Can manage conversation state server-side (no need to send full history)
+- **Cost:** 40-80% better cache utilization than Chat Completions
+- **Built-in tools:** Web search, file search, code interpreter, MCP
+
+> **SkyClaw impact:** Our `OpenAICompatProvider` currently uses `/v1/chat/completions`. For OAuth/Codex models, we need a **separate Responses API adapter** or modify the provider to support both wire protocols. This reinforces the isolation requirement.
+
+### Available Codex Models (as of March 2026)
+
+| Model ID | Type | API | Notes |
+|----------|------|-----|-------|
+| `gpt-5.4` | Flagship | Responses | Powers Codex. Combines coding + reasoning. Recommended. |
+| `gpt-5.4-pro` | Premium | Responses | API key only. Pro/Business/Enterprise plans. |
+| `gpt-5.3-codex` | Coding | Responses **only** | Agentic coding. Supports reasoning effort (low/med/high/xhigh). |
+| `gpt-5.3-codex-spark` | Fast | Responses only | Near-instant. **Pro users only.** |
+| `gpt-5.2-codex` | Legacy | Responses | Previous coding model. |
+| `gpt-5-codex` | Legacy | Responses | Alias, regularly updated snapshot. |
+| `gpt-5-codex-mini` | Budget | Responses | Lower cost variant. |
+| `gpt-5-mini` | Budget | Both | Cost-sensitive workloads. |
+
+**Retired (Feb 2026):** `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`, `o4-mini`, `gpt-5` (Instant/Thinking).
+
+ChatGPT Plus ($20/mo) gives access to `gpt-5.3` with 160 messages/3 hours, then downgrades to mini. ChatGPT Pro ($200/mo) gives unlimited + `gpt-5.3-codex-spark`.
 
 ---
 
@@ -160,88 +203,223 @@ src/agents/model-auth.ts                    — Token injection into API request
 
 ---
 
+## Lessons from OpenClaw — Model Naming and Provider Isolation
+
+OpenClaw made critical mistakes mixing OAuth and API key paths that we MUST avoid.
+
+### OpenClaw Bug #30844: Hard-Routing Disaster
+
+OpenClaw's `normalizeModelRef()` function unconditionally reroutes any model containing "codex" in its name to the `openai-codex` (OAuth) provider — even when the user configured an API key. Result: users with API keys who try `gpt-5.3-codex` get a JWT parsing error (`"Failed to extract accountId from token"`). The request fails in 23ms (before reaching the model) instead of the normal 3-5s.
+
+**Root cause:** Model name contains provider routing hints. The name `gpt-5.3-codex` triggers OAuth path regardless of user intent.
+
+### OpenClaw Bug #30533: Onboarding Confusion
+
+OpenClaw's UI groups "OpenAI (API key)" and "OpenAI Codex (OAuth)" under a single "OpenAI" category. Users complete setup with only an API key, then fail when trying Codex models because the OAuth profile is missing.
+
+**Root cause:** The two authentication methods are not visually or conceptually separated.
+
+### Design Rules for SkyClaw (Learned from OpenClaw)
+
+1. **Provider names MUST be distinct:** `openai` (API key) and `openai-codex` (OAuth) are separate providers with separate configs, separate credentials, separate model lists.
+
+2. **Model names MUST NOT encode provider routing:** Never auto-route based on model name substrings. The user's config (`provider.name`) decides the auth path, not the model string.
+
+3. **Model IDs are passed through verbatim:** SkyClaw sends whatever model string the user configured directly to the API. No normalization, no rewriting. `gpt-5.3-codex` is a valid model ID for both API key and OAuth paths — the difference is authentication, not the model name.
+
+4. **Clean removal path:** All OAuth code must be behind a feature flag (`codex-oauth`) and in a separate crate or module. If OpenAI blocks third-party OAuth, we `cargo build` without the flag and everything works exactly as before.
+
+---
+
 ## Proposed SkyClaw Implementation Plan
 
-### Phase 1: OAuth Flow (New Module)
+### Architecture: Isolation-First Design
 
-**New file:** `crates/skyclaw-providers/src/openai_oauth.rs`
+```
+crates/
+  skyclaw-codex-oauth/           ← NEW CRATE (behind feature flag "codex-oauth")
+    src/
+      lib.rs                     ← Public API: login(), refresh(), token_store()
+      pkce.rs                    ← PKCE verifier/challenge generation
+      callback_server.rs         ← Temporary axum server for OAuth redirect
+      token_store.rs             ← Read/write ~/.skyclaw/oauth.json
+      responses_provider.rs      ← Provider trait impl using Responses API
+```
+
+**Why a separate crate, not a module in skyclaw-providers:**
+- **Clean removal:** `Cargo.toml` drops the dep, `#[cfg(feature = "codex-oauth")]` gates vanish, zero residue
+- **Dependency isolation:** `jsonwebtoken` (if used) only pulled in when feature is enabled
+- **No contamination:** `OpenAICompatProvider` stays unchanged — it's a different API shape entirely (Chat Completions vs Responses)
+- **Build gating:** CI can test with and without `codex-oauth` to verify clean separation
+
+### Phase 1: OAuth Flow
+
+**New crate:** `crates/skyclaw-codex-oauth/`
 
 ```rust
-pub struct OpenAIOAuth {
-    client_id: String,        // "app_EMoamEEZ73f0CkXaXp7hrann"
-    redirect_port: u16,       // Dynamic port, default 1455
-    tokens: Option<OAuthTokens>,
+/// OAuth token set — stored in ~/.skyclaw/oauth.json
+#[derive(Serialize, Deserialize)]
+pub struct CodexOAuthTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: u64,          // Unix timestamp
+    pub email: String,
+    pub account_id: String,
 }
 
-pub struct OAuthTokens {
-    access_token: String,
-    refresh_token: String,
-    expires_at: u64,          // Unix timestamp
-    email: String,
-    account_id: String,
+/// PKCE + OAuth flow
+pub async fn login(headless: bool) -> Result<CodexOAuthTokens, SkyclawError> {
+    // 1. Generate PKCE verifier (32 random bytes → base64url)
+    // 2. Generate code_challenge = base64url(sha256(verifier))
+    // 3. Generate random state
+    // 4. Build authorize URL
+    // 5. If headless: print URL, ask user to paste redirect URL
+    //    If GUI: open browser + bind callback server on 127.0.0.1:{port}
+    // 6. Wait for auth code
+    // 7. POST to token endpoint with code + verifier
+    // 8. Decode id_token JWT payload (base64, no signature verification)
+    // 9. Extract email + accountId (org) from JWT claims
+    // 10. Store tokens to ~/.skyclaw/oauth.json
+    // 11. Scope probe: make test API call to /v1/responses
+    //     If 403 → fail with clear error about missing scopes
 }
 ```
 
-**Flow:**
-1. Generate PKCE verifier + challenge (ring or sha2 crate)
-2. Generate random state
-3. Build authorize URL
-4. Bind temporary HTTP server on `127.0.0.1:{port}` for callback
-5. Open browser (or print URL for headless/Telegram)
-6. Wait for callback with auth code
-7. Exchange code for tokens at token endpoint
-8. Extract email + accountId from id_token JWT (decode without verification — OpenAI signed)
-9. Store tokens to `~/.skyclaw/oauth.json`
-10. Validate token by making a test API call
+### Phase 2: Responses API Provider
 
-### Phase 2: Token Management
+**This is NOT a modification to `OpenAICompatProvider`.** It's a separate `Provider` trait implementation because the Responses API has a fundamentally different request/response shape.
 
-**Token refresh:** Before each `Provider::complete()` call, check expiry. If within 5 min, refresh. Use `tokio::sync::Mutex` as file lock equivalent.
+```rust
+/// Provider that uses OpenAI Responses API with OAuth tokens
+pub struct CodexResponsesProvider {
+    token_store: Arc<TokenStore>,  // Handles auto-refresh
+    model: String,
+    base_url: String,              // https://api.openai.com/v1
+}
 
-**Storage:** `~/.skyclaw/oauth.json`
+#[async_trait]
+impl Provider for CodexResponsesProvider {
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+        // 1. Get fresh access token (auto-refresh if within 5 min of expiry)
+        // 2. Convert CompletionRequest messages → Responses API "input" format
+        // 3. POST /v1/responses with Authorization: Bearer {jwt}
+        // 4. Convert Responses API output → CompletionResponse
+    }
+
+    async fn stream(&self, request: CompletionRequest) -> Result<CompletionStream> {
+        // Same but with stream=true, SSE parsing
+    }
+}
+```
+
+**Request translation (Chat Completions → Responses API):**
+```
+Chat Completions format:              Responses API format:
+{                                     {
+  "model": "gpt-5.3-codex",            "model": "gpt-5.3-codex",
+  "messages": [                         "instructions": "You are...",
+    {"role": "system", "content": ..},  "input": [
+    {"role": "user", "content": ..},      {"role": "user", "content": ..},
+    {"role": "assistant", "content": ..}  {"role": "assistant", "content": ..}
+  ]                                     ]
+}                                     }
+```
+
+Key differences:
+- `system` message → `instructions` top-level field
+- `messages` → `input` (items, not messages)
+- Response: `output` array of items vs `choices[0].message`
+- Tool calls: different schema (Responses API has built-in tool types)
+
+### Phase 3: Token Management
+
+**Storage:** `~/.skyclaw/oauth.json` (separate from `credentials.toml`)
 ```json
 {
-  "openai-codex": {
-    "access_token": "...",
-    "refresh_token": "...",
-    "expires_at": 1710180000,
-    "email": "user@email.com",
-    "account_id": "org-abc123"
-  }
+  "access_token": "eyJhb...",
+  "refresh_token": "ort_abc...",
+  "expires_at": 1710180000,
+  "email": "user@example.com",
+  "account_id": "org-abc123"
 }
 ```
 
-### Phase 3: Provider Integration
+**Auto-refresh logic:**
+```rust
+impl TokenStore {
+    pub async fn get_access_token(&self) -> Result<String> {
+        let tokens = self.tokens.lock().await;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
-Modify `OpenAICompatProvider` to accept either:
-- `api_key` (existing) — `Authorization: Bearer sk-...`
-- `oauth_token` (new) — `Authorization: Bearer eyJhb...`
+        if tokens.expires_at > now + 300 {  // 5 min buffer
+            return Ok(tokens.access_token.clone());
+        }
 
-The provider doesn't care which — both go in the same header. The difference is how they're obtained and refreshed.
+        // Refresh
+        let new_tokens = refresh_token(&tokens.refresh_token).await?;
+        self.save_to_disk(&new_tokens)?;
+        Ok(new_tokens.access_token)
+    }
+}
+```
+
+**Race condition prevention:** Single `tokio::sync::Mutex` — only one refresh at a time. Callers waiting for the lock get the already-refreshed token.
 
 ### Phase 4: User Experience
 
-**CLI:**
+**Config (`skyclaw.toml`) — completely separate provider block:**
+```toml
+[provider]
+name = "openai-codex"         # ← Distinct provider name
+model = "gpt-5.3-codex"       # ← Model ID passed through verbatim
+# No api_key needed — uses OAuth tokens from ~/.skyclaw/oauth.json
 ```
-skyclaw auth login --provider openai-codex    # Opens browser for OAuth
-skyclaw auth status                            # Shows auth state
-skyclaw auth logout                            # Clears tokens
+
+vs the existing API key path (unchanged):
+```toml
+[provider]
+name = "openai"
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-5.2"
+```
+
+**Factory routing in `create_provider()`:**
+```rust
+match provider_name {
+    "openai-codex" => {
+        #[cfg(feature = "codex-oauth")]
+        return Ok(Arc::new(CodexResponsesProvider::new(model, token_store)));
+        #[cfg(not(feature = "codex-oauth"))]
+        return Err(SkyclawError::Config(
+            "OpenAI Codex OAuth requires the 'codex-oauth' feature. \
+             Build with: cargo build --features codex-oauth".to_string()
+        ));
+    }
+    "openai" | "gemini" | "grok" | ... => {
+        // Existing OpenAICompatProvider path — completely untouched
+    }
+}
+```
+
+**CLI commands:**
+```
+skyclaw auth login                    # Opens browser for OAuth (or headless flow)
+skyclaw auth status                   # Shows: email, account, token expiry
+skyclaw auth logout                   # Deletes ~/.skyclaw/oauth.json
 ```
 
 **Telegram (headless):**
 ```
-/auth openai                                   # Bot sends OAuth URL
-User clicks → authorizes → gets code
-User pastes code back to bot
-Bot exchanges code for tokens
-```
+User: /auth
+Bot:  Click this link to authenticate with your ChatGPT account:
+      https://auth.openai.com/oauth/authorize?client_id=...&redirect_uri=...
 
-**Config (`skyclaw.toml`):**
-```toml
-[provider]
-name = "openai-codex"
-auth = "oauth"                # vs "api_key" (default)
-model = "gpt-5.2"
+      After signing in, paste the URL you were redirected to here.
+
+User: http://127.0.0.1:1455/auth/callback?code=abc123&state=xyz
+
+Bot:  Authenticated! Connected as user@example.com.
+      Model: gpt-5.3-codex (ChatGPT Plus subscription)
 ```
 
 ### Phase 5: Device Code Flow (Stretch)
@@ -252,23 +430,37 @@ skyclaw auth login --device-code
 ```
 Uses OpenAI's device code flow (beta) — user gets a code, enters it at openai.com/device.
 
+### Removal Procedure (If TOS Issues Arise)
+
+If OpenAI blocks third-party OAuth usage:
+
+1. `Cargo.toml`: Remove `codex-oauth` from default features
+2. Users: Switch `provider.name` from `"openai-codex"` to `"openai"` + add API key
+3. Code: All OAuth code is behind `#[cfg(feature = "codex-oauth")]` — compiles away to nothing
+4. No migration needed for API key users — they were never affected
+5. `crates/skyclaw-codex-oauth/` can be deleted entirely with zero impact on other crates
+
 ---
 
 ## Open Questions
 
-1. **Client ID legitimacy:** Is reusing `app_EMoamEEZ73f0CkXaXp7hrann` sanctioned by OpenAI? No official docs. Community consensus is "it works, everyone uses it." Risk: could be blocked.
+1. **Client ID legitimacy:** Is reusing `app_EMoamEEZ73f0CkXaXp7hrann` sanctioned by OpenAI? No official docs. Community consensus is "it works, everyone uses it" — OpenClaw, Roo Code, OpenCode, term-llm all do it. Risk: could be blocked. **Mitigation:** feature flag + clean removal path.
 
-2. **Scope requirements:** The identity scopes (`openid profile email offline_access`) may not be sufficient. OpenClaw hit bugs where tokens lacked `model.request` and `api.responses.write`. Need to test if the Codex client ID grants these scopes automatically or if they need to be requested explicitly.
+2. **Scope requirements:** Identity scopes (`openid profile email offline_access`) may not grant API access. OpenClaw fixed this with a post-login scope probe. **Action:** After login, immediately try a minimal `/v1/responses` call. If 403, fail with clear message.
 
-3. **Model availability:** Does OAuth give access to the same models as API keys? Or is it limited to Codex-specific models (e.g., `gpt-5.3-codex`)? Need to test.
+3. **Model availability:** Codex-specific models (`gpt-5.3-codex`, `gpt-5.3-codex-spark`) are Responses API only. Standard models (`gpt-5.4`, `gpt-5-mini`) work with both APIs. OAuth tokens should work with all models the user's subscription includes. **Need to test:** does a Plus subscription token work with `gpt-5.4` or only Codex variants?
 
-4. **Rate limits:** OAuth tokens may have different rate limits than API keys (subscription-based vs. pay-per-token). Need to verify.
+4. **Rate limits:** ChatGPT Plus = 160 messages/3hrs with gpt-5.3, then downgrades to mini. Pro = unlimited + spark. These are subscription-tier limits, not per-token billing. Need to handle rate limit responses gracefully (retry-after, downgrade model suggestion).
 
-5. **Telegram challenge:** Our primary interface is Telegram — no browser on the server. The headless flow (print URL → user pastes code) works but is clunky. Device code flow would be better but is beta.
+5. **Telegram challenge:** Our primary interface is Telegram — no browser on server. Headless flow: bot sends URL → user clicks in their browser → gets redirected to `127.0.0.1` (which won't exist on their machine) → user copies the URL and pastes it back. **Better approach:** Use a known redirect URI that displays the code, or device code flow.
 
-6. **Token lifetime:** Access tokens expire in ~1 hour. Refresh tokens may expire or be single-use. Need robust refresh handling with retry logic.
+6. **Token lifetime:** Access tokens expire in ~1 hour. Refresh tokens may be single-use (OpenClaw hit `refresh_token_reused` errors with concurrent refresh). **Fix:** Mutex-guarded single-writer refresh.
 
-7. **Legal/TOS:** Does using the Codex OAuth client ID for a third-party tool violate OpenAI's terms of service? No clear answer exists.
+7. **Legal/TOS:** No clear answer. OpenAI hasn't blocked third-party usage of the Codex client ID despite widespread use. **Mitigation:** Feature flag makes it removable in one commit.
+
+8. **Responses API adapter complexity:** The Responses API has a different request/response shape than Chat Completions. Need to translate SkyClaw's `CompletionRequest` (messages-based) to Responses API format (input/instructions-based). Tool call schemas also differ. This is the biggest implementation effort.
+
+9. **Chat Completions deprecation:** Codex CLI fully deprecated `/v1/chat/completions` in Feb 2026. If OAuth tokens only work with the Responses API endpoint, we MUST implement the Responses API adapter — no shortcut of reusing `OpenAICompatProvider`.
 
 ---
 
