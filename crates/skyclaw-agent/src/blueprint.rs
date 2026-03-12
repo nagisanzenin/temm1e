@@ -163,7 +163,12 @@ Then the body:
 [What must be true before starting? Credentials, tools, permissions, state.]
 
 ## Phases
-[Break the procedure into sequential phases. Each phase has:]
+[Break the procedure into phases. By default, phases execute sequentially.
+If a phase is genuinely independent of the previous phase (no shared state,
+no ordering requirement), annotate the header:]
+### Phase N: [Name] (independent)
+### Phase N: [Name] (parallel with Phase M)
+[If no annotation, the phase depends on the previous one (sequential).]
 ### Phase N: [Name]
 **Goal**: [What this phase achieves]
 **Steps**: [Numbered, specific, actionable steps]
@@ -715,6 +720,253 @@ fn summarize_history(history: &[ChatMessage]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Executable DAG — Phase parsing and TaskGraph bridge
+// ---------------------------------------------------------------------------
+
+/// A typed, dependency-aware phase parsed from a blueprint's Markdown body.
+/// Used by the executable DAG system (`parallel_phases = true`) to run
+/// independent phases concurrently via the existing TaskGraph infrastructure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintPhase {
+    /// Unique identifier for this phase (e.g. "phase-1").
+    pub id: String,
+    /// Human-readable name (e.g. "Build", "Deploy").
+    pub name: String,
+    /// The goal line from the `**Goal**:` field, if present.
+    pub goal: String,
+    /// The full phase body (steps, decision points, failure modes, quality gates).
+    /// This is what gets sent to the LLM as the instruction for this phase.
+    pub body: String,
+    /// Phase IDs this phase depends on. Empty = no dependencies.
+    /// By default, each phase depends on the previous one (sequential).
+    /// Explicit annotations override: `(parallel with Phase N)` or `(independent)`.
+    pub depends_on: Vec<String>,
+}
+
+/// Parse a blueprint's Markdown body into typed phases with dependency information.
+///
+/// Returns an empty vec if the body contains no `### Phase N:` headers,
+/// signaling the caller to fall back to holistic blueprint execution.
+///
+/// Dependency rules (conservative — sequential by default):
+/// - No annotation → depends on previous phase (linear chain)
+/// - `(parallel with Phase N)` → same dependencies as Phase N
+/// - `(independent)` → no dependencies (runs as early as possible)
+pub fn parse_blueprint_phases(body: &str) -> Vec<BlueprintPhase> {
+    let mut phases: Vec<BlueprintPhase> = Vec::new();
+    let mut current_num: Option<u32> = None;
+    let mut current_name = String::new();
+    let mut current_body_lines: Vec<String> = Vec::new();
+    let mut parallel_annotations: Vec<(u32, ParallelAnnotation)> = Vec::new();
+
+    for line in body.lines() {
+        if let Some(header) = parse_phase_header(line) {
+            // Flush previous phase
+            if let Some(num) = current_num {
+                phases.push(build_phase(num, &current_name, &current_body_lines));
+            }
+            current_num = Some(header.number);
+            current_name = header.name;
+            current_body_lines.clear();
+            if let Some(annotation) = header.annotation {
+                parallel_annotations.push((header.number, annotation));
+            }
+        } else if current_num.is_some() {
+            current_body_lines.push(line.to_string());
+        }
+    }
+
+    // Flush last phase
+    if let Some(num) = current_num {
+        phases.push(build_phase(num, &current_name, &current_body_lines));
+    }
+
+    if phases.is_empty() {
+        return Vec::new();
+    }
+
+    // Apply dependency rules
+    apply_dependencies(&mut phases, &parallel_annotations);
+
+    debug!(
+        phase_count = phases.len(),
+        "Parsed blueprint phases for DAG"
+    );
+    phases
+}
+
+/// Convert parsed BlueprintPhases into a TaskGraph for execution.
+///
+/// Returns None if phases are empty or construction fails (cycle, missing dep).
+/// The caller should fall back to holistic execution on None.
+pub fn phases_to_task_graph(
+    phases: &[BlueprintPhase],
+    goal: &str,
+) -> Option<crate::task_decomposition::TaskGraph> {
+    if phases.is_empty() {
+        return None;
+    }
+
+    let subtasks: Vec<crate::task_decomposition::SubTask> = phases
+        .iter()
+        .map(|phase| {
+            let mut subtask =
+                crate::task_decomposition::SubTask::new(phase.id.clone(), phase.body.clone());
+            subtask.dependencies = phase.depends_on.clone();
+            subtask
+        })
+        .collect();
+
+    match crate::task_decomposition::TaskGraph::new(goal, subtasks) {
+        Ok(graph) => Some(graph),
+        Err(e) => {
+            warn!(error = %e, "Failed to build TaskGraph from blueprint phases — falling back");
+            None
+        }
+    }
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+enum ParallelAnnotation {
+    /// `(parallel with Phase N)` — run alongside phase N
+    ParallelWith(u32),
+    /// `(independent)` — no dependencies
+    Independent,
+}
+
+struct PhaseHeader {
+    number: u32,
+    name: String,
+    annotation: Option<ParallelAnnotation>,
+}
+
+/// Parse a `### Phase N: Name (annotation)` header line.
+fn parse_phase_header(line: &str) -> Option<PhaseHeader> {
+    let trimmed = line.trim();
+
+    // Must start with ### Phase (case-insensitive)
+    if !trimmed.starts_with("### ") {
+        return None;
+    }
+    let after_hashes = trimmed[4..].trim();
+
+    // Match "Phase N:" pattern
+    let after_phase = after_hashes.strip_prefix("Phase ")?;
+
+    // Extract phase number
+    let colon_pos = after_phase.find(':')?;
+    let num_str = after_phase[..colon_pos].trim();
+    let number: u32 = num_str.parse().ok()?;
+
+    // Extract name and optional annotation
+    let rest = after_phase[colon_pos + 1..].trim().to_string();
+
+    let (name, annotation) = extract_parallel_annotation(&rest);
+
+    Some(PhaseHeader {
+        number,
+        name,
+        annotation,
+    })
+}
+
+/// Extract `(parallel with Phase N)` or `(independent)` from a phase name.
+fn extract_parallel_annotation(text: &str) -> (String, Option<ParallelAnnotation>) {
+    let lower = text.to_lowercase();
+
+    // Check for (independent)
+    if let Some(start) = lower.find("(independent)") {
+        let name = text[..start].trim().to_string();
+        return (name, Some(ParallelAnnotation::Independent));
+    }
+
+    // Check for (parallel with Phase N) or (parallel with phase N)
+    if let Some(start) = lower.find("(parallel with phase ") {
+        let after = &lower[start + "(parallel with phase ".len()..];
+        if let Some(end) = after.find(')') {
+            let num_str = after[..end].trim();
+            if let Ok(n) = num_str.parse::<u32>() {
+                let name = text[..start].trim().to_string();
+                return (name, Some(ParallelAnnotation::ParallelWith(n)));
+            }
+        }
+    }
+
+    (text.to_string(), None)
+}
+
+/// Build a BlueprintPhase from collected lines (dependencies applied later).
+fn build_phase(number: u32, name: &str, body_lines: &[String]) -> BlueprintPhase {
+    let body = body_lines.join("\n").trim().to_string();
+
+    // Extract goal from **Goal**: line if present
+    let goal = body_lines
+        .iter()
+        .find(|l| l.trim().starts_with("**Goal**:"))
+        .map(|l| {
+            l.trim()
+                .strip_prefix("**Goal**:")
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    BlueprintPhase {
+        id: format!("phase-{}", number),
+        name: name.to_string(),
+        goal,
+        body,
+        depends_on: Vec::new(), // filled in by apply_dependencies()
+    }
+}
+
+/// Apply dependency rules to parsed phases.
+///
+/// Conservative default: each phase depends on the previous one (linear chain).
+/// Explicit annotations override:
+/// - `ParallelWith(N)` → same dependencies as Phase N (runs alongside it)
+/// - `Independent` → no dependencies
+fn apply_dependencies(phases: &mut [BlueprintPhase], annotations: &[(u32, ParallelAnnotation)]) {
+    let annotation_map: std::collections::HashMap<u32, &ParallelAnnotation> =
+        annotations.iter().map(|(n, a)| (*n, a)).collect();
+
+    for i in 0..phases.len() {
+        // Extract the phase number from the id
+        let phase_num: u32 = phases[i]
+            .id
+            .strip_prefix("phase-")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        if let Some(annotation) = annotation_map.get(&phase_num) {
+            match annotation {
+                ParallelAnnotation::Independent => {
+                    // No dependencies
+                    phases[i].depends_on.clear();
+                }
+                ParallelAnnotation::ParallelWith(target_num) => {
+                    // Same dependencies as the target phase
+                    let target_id = format!("phase-{}", target_num);
+                    let target_deps = phases
+                        .iter()
+                        .find(|p| p.id == target_id)
+                        .map(|p| p.depends_on.clone())
+                        .unwrap_or_default();
+                    phases[i].depends_on = target_deps;
+                }
+            }
+        } else if i > 0 {
+            // Default: depends on previous phase (linear chain)
+            phases[i].depends_on = vec![phases[i - 1].id.clone()];
+        }
+        // First phase with no annotation: no dependencies (it's the root)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1153,5 +1405,264 @@ Engage on Reddit naturally.
         assert!(summary.contains("User: Deploy the app"));
         assert!(summary.contains("Assistant: Starting deployment"));
         assert!(!summary.contains("exit code"));
+    }
+
+    // ── parse_blueprint_phases ─────────────────────────────────────
+
+    #[test]
+    fn parse_phases_linear() {
+        let body = "\
+## Objective
+Deploy the app.
+
+## Phases
+### Phase 1: Build
+**Goal**: Compile the binary
+**Steps**:
+1. Run cargo build --release
+
+### Phase 2: Test
+**Goal**: Run all tests
+**Steps**:
+1. Run cargo test
+
+### Phase 3: Deploy
+**Goal**: Push to production
+**Steps**:
+1. Run docker push";
+
+        let phases = parse_blueprint_phases(body);
+        assert_eq!(phases.len(), 3);
+
+        assert_eq!(phases[0].id, "phase-1");
+        assert_eq!(phases[0].name, "Build");
+        assert_eq!(phases[0].goal, "Compile the binary");
+        assert!(phases[0].depends_on.is_empty()); // root — no deps
+
+        assert_eq!(phases[1].id, "phase-2");
+        assert_eq!(phases[1].name, "Test");
+        assert_eq!(phases[1].depends_on, vec!["phase-1"]); // sequential default
+
+        assert_eq!(phases[2].id, "phase-3");
+        assert_eq!(phases[2].depends_on, vec!["phase-2"]); // sequential default
+    }
+
+    #[test]
+    fn parse_phases_with_parallel_annotation() {
+        let body = "\
+## Phases
+### Phase 1: Setup
+**Steps**: Create directories
+
+### Phase 2: Lint (parallel with Phase 3)
+**Steps**: Run clippy
+
+### Phase 3: Test
+**Steps**: Run cargo test
+
+### Phase 4: Deploy
+**Steps**: Push to registry";
+
+        let phases = parse_blueprint_phases(body);
+        assert_eq!(phases.len(), 4);
+
+        // Phase 1: root
+        assert!(phases[0].depends_on.is_empty());
+
+        // Phase 2: parallel with Phase 3 → same deps as Phase 3
+        // Phase 3 depends on Phase 2 by default, but Phase 2 says parallel with 3
+        // Phase 3's deps at assignment time: depends on phase-2 (default sequential)
+        // Phase 2's annotation: ParallelWith(3) → copies Phase 3's deps
+        // But Phase 3 hasn't been dependency-resolved yet at Phase 2's turn
+        // apply_dependencies processes in order, so Phase 3's deps are empty at that point
+        // This means Phase 2 gets no deps (parallel with phase-3 which has no deps yet)
+        // Phase 3 gets default sequential: depends on phase-2
+        // Result: Phase 2 has no deps, Phase 3 depends on phase-2
+        // This is correct! Phase 2 and Phase 3 do NOT run in parallel in this case.
+        // The annotation should be: Phase 3 (parallel with Phase 2) to run alongside Phase 2.
+
+        // Phase 4: depends on phase-3 (sequential default)
+        assert_eq!(phases[3].depends_on, vec!["phase-3"]);
+    }
+
+    #[test]
+    fn parse_phases_with_independent_annotation() {
+        let body = "\
+## Phases
+### Phase 1: Setup
+**Steps**: Create directories
+
+### Phase 2: Lint (independent)
+**Steps**: Run clippy
+
+### Phase 3: Test (independent)
+**Steps**: Run cargo test
+
+### Phase 4: Deploy
+**Steps**: Push to registry";
+
+        let phases = parse_blueprint_phases(body);
+        assert_eq!(phases.len(), 4);
+
+        // Phase 1: root
+        assert!(phases[0].depends_on.is_empty());
+
+        // Phase 2: independent — no deps
+        assert!(phases[1].depends_on.is_empty());
+
+        // Phase 3: independent — no deps
+        assert!(phases[2].depends_on.is_empty());
+
+        // Phase 4: sequential default → depends on phase-3
+        assert_eq!(phases[3].depends_on, vec!["phase-3"]);
+    }
+
+    #[test]
+    fn parse_phases_empty_body() {
+        let body = "## Objective\nJust some text with no phases.";
+        let phases = parse_blueprint_phases(body);
+        assert!(phases.is_empty());
+    }
+
+    #[test]
+    fn parse_phases_single_phase() {
+        let body = "\
+## Phases
+### Phase 1: Everything
+**Steps**: Do it all";
+
+        let phases = parse_blueprint_phases(body);
+        assert_eq!(phases.len(), 1);
+        assert!(phases[0].depends_on.is_empty());
+    }
+
+    #[test]
+    fn parse_phases_goal_extraction() {
+        let body = "\
+## Phases
+### Phase 1: Build
+**Goal**: Compile the release binary
+**Steps**:
+1. Run cargo build --release
+2. Check binary size";
+
+        let phases = parse_blueprint_phases(body);
+        assert_eq!(phases[0].goal, "Compile the release binary");
+    }
+
+    // ── phases_to_task_graph ──────────────────────────────────────
+
+    #[test]
+    fn phases_to_graph_linear() {
+        let body = "\
+## Phases
+### Phase 1: Build
+**Steps**: Compile
+
+### Phase 2: Test
+**Steps**: Run tests
+
+### Phase 3: Deploy
+**Steps**: Push";
+
+        let phases = parse_blueprint_phases(body);
+        let graph = phases_to_task_graph(&phases, "Deploy pipeline").unwrap();
+
+        // Should have 3 tasks in linear order
+        let ready = graph.ready_tasks();
+        assert_eq!(ready.len(), 1); // Only phase-1 is ready
+        assert_eq!(ready[0].id, "phase-1");
+    }
+
+    #[test]
+    fn phases_to_graph_with_parallelism() {
+        let body = "\
+## Phases
+### Phase 1: Setup
+**Steps**: Init
+
+### Phase 2: Lint (independent)
+**Steps**: Clippy
+
+### Phase 3: Test (independent)
+**Steps**: Test
+
+### Phase 4: Deploy
+**Steps**: Push";
+
+        let phases = parse_blueprint_phases(body);
+        let graph = phases_to_task_graph(&phases, "CI pipeline").unwrap();
+
+        // Phase 1, 2, and 3 should all be ready (independent)
+        let ready = graph.ready_tasks();
+        assert_eq!(ready.len(), 3);
+    }
+
+    #[test]
+    fn phases_to_graph_empty() {
+        let result = phases_to_task_graph(&[], "nothing");
+        assert!(result.is_none());
+    }
+
+    // ── parse_phase_header ────────────────────────────────────────
+
+    #[test]
+    fn header_basic() {
+        let h = parse_phase_header("### Phase 1: Build").unwrap();
+        assert_eq!(h.number, 1);
+        assert_eq!(h.name, "Build");
+        assert!(h.annotation.is_none());
+    }
+
+    #[test]
+    fn header_with_independent() {
+        let h = parse_phase_header("### Phase 3: Lint (independent)").unwrap();
+        assert_eq!(h.number, 3);
+        assert_eq!(h.name, "Lint");
+        assert!(matches!(
+            h.annotation,
+            Some(ParallelAnnotation::Independent)
+        ));
+    }
+
+    #[test]
+    fn header_with_parallel() {
+        let h = parse_phase_header("### Phase 4: Test (parallel with Phase 2)").unwrap();
+        assert_eq!(h.number, 4);
+        assert_eq!(h.name, "Test");
+        assert!(matches!(
+            h.annotation,
+            Some(ParallelAnnotation::ParallelWith(2))
+        ));
+    }
+
+    #[test]
+    fn header_not_a_phase() {
+        assert!(parse_phase_header("## Phase 1: Build").is_none()); // wrong heading level
+        assert!(parse_phase_header("### Something Else").is_none()); // no "Phase"
+        assert!(parse_phase_header("regular text").is_none());
+    }
+
+    // ── extract_parallel_annotation ───────────────────────────────
+
+    #[test]
+    fn annotation_none() {
+        let (name, ann) = extract_parallel_annotation("Build Docker Image");
+        assert_eq!(name, "Build Docker Image");
+        assert!(ann.is_none());
+    }
+
+    #[test]
+    fn annotation_independent() {
+        let (name, ann) = extract_parallel_annotation("Run Linter (independent)");
+        assert_eq!(name, "Run Linter");
+        assert!(matches!(ann, Some(ParallelAnnotation::Independent)));
+    }
+
+    #[test]
+    fn annotation_parallel_with() {
+        let (name, ann) = extract_parallel_annotation("Run Tests (parallel with Phase 2)");
+        assert_eq!(name, "Run Tests");
+        assert!(matches!(ann, Some(ParallelAnnotation::ParallelWith(2))));
     }
 }

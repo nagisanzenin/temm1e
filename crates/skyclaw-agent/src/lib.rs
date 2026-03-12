@@ -28,7 +28,7 @@ pub mod task_queue;
 pub mod watchdog;
 
 pub use agent_task_status::{AgentTaskPhase, AgentTaskStatus};
-pub use blueprint::Blueprint;
+pub use blueprint::{Blueprint, BlueprintPhase};
 pub use budget::BudgetTracker;
 pub use circuit_breaker::CircuitBreaker;
 pub use delegation::{DelegationManager, SubAgent, SubAgentResult, SubAgentStatus};

@@ -2034,7 +2034,8 @@ async fn main() -> Result<()> {
                             config.agent.max_task_duration_secs,
                             config.agent.max_spend_usd,
                         )
-                        .with_v2_optimizations(config.agent.v2_optimizations),
+                        .with_v2_optimizations(config.agent.v2_optimizations)
+                        .with_parallel_phases(config.agent.parallel_phases),
                     );
                     *agent_state.write().await = Some(agent);
                     tracing::info!(provider = %pname, model = %model, "Agent initialized");
@@ -2067,7 +2068,8 @@ async fn main() -> Result<()> {
                                         config.agent.max_task_duration_secs,
                                         config.agent.max_spend_usd,
                                     )
-                                    .with_v2_optimizations(config.agent.v2_optimizations),
+                                    .with_v2_optimizations(config.agent.v2_optimizations)
+                                    .with_parallel_phases(config.agent.parallel_phases),
                                 );
                                 *agent_state.write().await = Some(agent);
                                 tracing::info!(provider = "openai-codex", model = %model, "Agent initialized via Codex OAuth");
@@ -2160,6 +2162,7 @@ async fn main() -> Result<()> {
                 let agent_max_task_duration = config.agent.max_task_duration_secs;
                 let agent_max_spend_usd = config.agent.max_spend_usd;
                 let agent_v2_opt = config.agent.v2_optimizations;
+                let agent_parallel_phases = config.agent.parallel_phases;
                 let provider_base_url = config.provider.base_url.clone();
                 let ws_path = workspace_path.clone();
                 let pending_clone = pending_messages.clone();
@@ -2250,6 +2253,7 @@ async fn main() -> Result<()> {
                             let max_task_duration = agent_max_task_duration;
                             let max_spend = agent_max_spend_usd;
                             let v2_opt = agent_v2_opt;
+                            let pp_opt = agent_parallel_phases;
                             let base_url = provider_base_url.clone();
                             let sender = sender.clone();
                             let workspace_path = ws_path.clone();
@@ -2430,7 +2434,7 @@ async fn main() -> Result<()> {
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = "openai-codex",
@@ -2474,7 +2478,7 @@ async fn main() -> Result<()> {
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = %creds.active,
@@ -2694,7 +2698,7 @@ Just type a message to chat with the AI agent.",
                                                                     agent.model().to_string(),
                                                                     Some(build_system_prompt()),
                                                                     max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                                ).with_v2_optimizations(v2_opt));
+                                                                ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                                 *agent_state.write().await = Some(new_agent);
                                                             }
                                                             mcp_mgr.take_tools_changed();
@@ -2723,7 +2727,7 @@ Just type a message to chat with the AI agent.",
                                                             agent.model().to_string(),
                                                             Some(build_system_prompt()),
                                                             max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                        ).with_v2_optimizations(v2_opt));
+                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                         *agent_state.write().await = Some(new_agent);
                                                     }
                                                     mcp_mgr.take_tools_changed();
@@ -2750,7 +2754,7 @@ Just type a message to chat with the AI agent.",
                                                             agent.model().to_string(),
                                                             Some(build_system_prompt()),
                                                             max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                        ).with_v2_optimizations(v2_opt));
+                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                         *agent_state.write().await = Some(new_agent);
                                                     }
                                                     mcp_mgr.take_tools_changed();
@@ -2827,7 +2831,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = %prov.name,
@@ -3029,7 +3033,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             let reply = skyclaw_core::types::message::OutboundMessage {
                                                                 chat_id: msg.chat_id.clone(),
@@ -3141,7 +3145,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             let key_count = keys.len();
                                                             let reply = skyclaw_core::types::message::OutboundMessage {
@@ -3410,7 +3414,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(provider = %new_name, model = %new_model, "Agent hot-reloaded (key validated)");
                                                         }
@@ -3459,7 +3463,7 @@ Just type a message to chat with the AI agent.",
                                                 agent.model().to_string(),
                                                 Some(build_system_prompt()),
                                                 max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                            ).with_v2_optimizations(v2_opt));
+                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                             *agent_state.write().await = Some(new_agent);
                                             tracing::info!("Agent rebuilt with updated MCP tools");
                                         }
@@ -3490,7 +3494,7 @@ Just type a message to chat with the AI agent.",
                                                 agent.model().to_string(),
                                                 Some(build_system_prompt()),
                                                 max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                            ).with_v2_optimizations(v2_opt));
+                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                             *agent_state.write().await = Some(new_agent);
                                             tracing::info!("Agent rebuilt with updated custom tools");
                                         }
@@ -3541,7 +3545,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt));
                                                             *agent_state.write().await = Some(new_agent);
 
                                                             if let Err(e) = save_credentials(provider_name, &api_key, &model, custom_base_url.as_deref()).await {
@@ -3863,6 +3867,7 @@ Just type a message to chat with the AI agent.",
             let max_task_duration = config.agent.max_task_duration_secs;
             let max_spend = config.agent.max_spend_usd;
             let v2_opt = config.agent.v2_optimizations;
+            let pp_opt = config.agent.parallel_phases;
 
             let mut agent_opt: Option<skyclaw_agent::AgentRuntime> = None;
 
@@ -3931,7 +3936,8 @@ Just type a message to chat with the AI agent.",
                                     max_task_duration,
                                     max_spend,
                                 )
-                                .with_v2_optimizations(v2_opt),
+                                .with_v2_optimizations(v2_opt)
+                                .with_parallel_phases(pp_opt),
                             );
                             println!("Connected to {} (model: {})", pname, model);
                             if max_spend > 0.0 {
@@ -3976,7 +3982,8 @@ Just type a message to chat with the AI agent.",
                                         max_task_duration,
                                         max_spend,
                                     )
-                                    .with_v2_optimizations(v2_opt),
+                                    .with_v2_optimizations(v2_opt)
+                                    .with_parallel_phases(pp_opt),
                                 );
                                 println!(
                                     "Connected to openai-codex via Codex OAuth (model: {})",
@@ -4214,7 +4221,8 @@ Just type a message to chat with the AI agent.",
                                                     max_task_duration,
                                                     max_spend,
                                                 )
-                                                .with_v2_optimizations(v2_opt),
+                                                .with_v2_optimizations(v2_opt)
+                                                .with_parallel_phases(pp_opt),
                                             );
                                         }
                                         mcp_manager.take_tools_changed();
@@ -4259,7 +4267,8 @@ Just type a message to chat with the AI agent.",
                                             max_task_duration,
                                             max_spend,
                                         )
-                                        .with_v2_optimizations(v2_opt),
+                                        .with_v2_optimizations(v2_opt)
+                                        .with_parallel_phases(pp_opt),
                                     );
                                 }
                                 mcp_manager.take_tools_changed();
@@ -4299,7 +4308,8 @@ Just type a message to chat with the AI agent.",
                                             max_task_duration,
                                             max_spend,
                                         )
-                                        .with_v2_optimizations(v2_opt),
+                                        .with_v2_optimizations(v2_opt)
+                                        .with_parallel_phases(pp_opt),
                                     );
                                 }
                                 mcp_manager.take_tools_changed();
@@ -4378,7 +4388,8 @@ Just type a message to chat with the AI agent.",
                                                 max_task_duration,
                                                 max_spend,
                                             )
-                                            .with_v2_optimizations(v2_opt),
+                                            .with_v2_optimizations(v2_opt)
+                                            .with_parallel_phases(pp_opt),
                                         );
                                         println!(
                                             "\nAPI key securely received and verified! Configured {} with model {}.",
@@ -4445,7 +4456,8 @@ Just type a message to chat with the AI agent.",
                                     max_task_duration,
                                     max_spend,
                                 )
-                                .with_v2_optimizations(v2_opt),
+                                .with_v2_optimizations(v2_opt)
+                                .with_parallel_phases(pp_opt),
                             );
                             println!(
                                 "\nAPI key verified! Configured {} with model {}.",

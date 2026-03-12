@@ -375,6 +375,12 @@ pub struct AgentConfig {
     /// Default: true (v2 behavior). Set to false to revert to v1 behavior.
     #[serde(default = "default_v2_optimizations")]
     pub v2_optimizations: bool,
+    /// Enable executable DAG for blueprint phases. When a blueprint is matched,
+    /// its phases are parsed into a dependency graph and independent phases
+    /// execute concurrently. Default: false (opt-in). When false, blueprints
+    /// are injected as context text and the LLM follows them holistically.
+    #[serde(default)]
+    pub parallel_phases: bool,
 }
 
 impl Default for AgentConfig {
@@ -389,6 +395,7 @@ impl Default for AgentConfig {
             streaming_tool_updates: true,
             max_spend_usd: 0.0,
             v2_optimizations: true,
+            parallel_phases: false,
         }
     }
 }

@@ -71,6 +71,12 @@ pub struct AgentRuntime {
     /// When true: complexity classification, prompt stratification,
     /// structured failure injection, and trivial fast-path.
     v2_optimizations: bool,
+    /// Whether executable DAG blueprint phase parallelism is enabled.
+    /// When true and a blueprint is matched, its phases are parsed into a
+    /// dependency graph and independent phases execute concurrently.
+    /// When false (default), blueprints are injected as context text.
+    /// This flag does NOT affect tool-level parallelism in executor.rs.
+    parallel_phases: bool,
 }
 
 impl AgentRuntime {
@@ -100,6 +106,7 @@ impl AgentRuntime {
             budget: BudgetTracker::new(0.0),
             model_pricing,
             v2_optimizations: true,
+            parallel_phases: false,
         }
     }
 
@@ -163,6 +170,7 @@ impl AgentRuntime {
             budget: BudgetTracker::new(max_spend_usd),
             model_pricing,
             v2_optimizations: true,
+            parallel_phases: false,
         }
     }
 
@@ -183,6 +191,20 @@ impl AgentRuntime {
     /// Check whether v2 optimizations are enabled.
     pub fn v2_enabled(&self) -> bool {
         self.v2_optimizations
+    }
+
+    /// Enable or disable executable DAG blueprint phase parallelism.
+    /// When enabled, matched blueprint phases are parsed into a TaskGraph
+    /// and independent phases execute concurrently. Does NOT affect
+    /// tool-level parallelism in executor.rs.
+    pub fn with_parallel_phases(mut self, enabled: bool) -> Self {
+        self.parallel_phases = enabled;
+        self
+    }
+
+    /// Check whether parallel phase execution is enabled.
+    pub fn parallel_phases_enabled(&self) -> bool {
+        self.parallel_phases
     }
 
     /// Process an inbound message through the full agent loop.
