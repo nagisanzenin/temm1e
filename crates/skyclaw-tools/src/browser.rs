@@ -260,7 +260,26 @@ impl BrowserTool {
         }
 
         // ── Stealth launch flags ─────────────────────────────────────
-        let config = BrowserConfig::builder()
+        let mut config_builder = BrowserConfig::builder();
+        
+        // Try to find Chrome executable on Windows
+        #[cfg(target_os = "windows")]
+        {
+            let chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ];
+            
+            for path in &chrome_paths {
+                if std::path::Path::new(path).exists() {
+                    config_builder = config_builder.chrome_executable(path);
+                    tracing::debug!("Found Chrome at: {}", path);
+                    break;
+                }
+            }
+        }
+        
+        let config = config_builder
             .arg("--headless=new")
             .arg("--disable-gpu")
             .arg("--no-sandbox")

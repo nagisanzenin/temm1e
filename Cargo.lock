@@ -4143,6 +4143,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "dirs",
  "futures",
  "serde",
  "serde_json",
