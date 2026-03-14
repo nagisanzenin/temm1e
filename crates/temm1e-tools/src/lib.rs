@@ -98,7 +98,7 @@ pub fn create_tools(
         tools.push(Arc::new(UsageAuditTool::new(store)));
     }
 
-    // mode_switch: toggle personality mode between PLAY and WORK
+    // mode_switch: toggle personality mode between PLAY, WORK, and PRO
     if let Some(mode) = shared_mode {
         tools.push(Arc::new(ModeSwitchTool::new(mode)));
     }

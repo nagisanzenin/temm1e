@@ -79,7 +79,7 @@ enum Commands {
         /// Log file path when running as daemon (default: ~/.temm1e/temm1e.log)
         #[arg(long)]
         log: Option<String>,
-        /// Temm1e personality mode: play (warm, chaotic :3) or work (sharp, precise >:3)
+        /// Temm1e personality mode: play (warm, chaotic :3), work (sharp, precise >:3), or pro (professional, no emoticons)
         #[arg(long, default_value = "play")]
         personality: String,
     },
@@ -115,6 +115,9 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
+    /// Interactive TUI with rich rendering, observability, and slash commands
+    #[cfg(feature = "tui")]
+    Tui,
 }
 
 #[cfg(feature = "codex-oauth")]
@@ -1574,6 +1577,7 @@ async fn main() -> Result<()> {
             // ── Parse personality mode ───────────────────────────
             let temm1e_mode = match personality.to_lowercase().as_str() {
                 "work" => temm1e_core::types::config::Temm1eMode::Work,
+                "pro" => temm1e_core::types::config::Temm1eMode::Pro,
                 _ => temm1e_core::types::config::Temm1eMode::Play,
             };
             config.mode = temm1e_mode;
@@ -4891,6 +4895,10 @@ Just type a message to chat with the AI agent.",
         },
         // Reset is handled before config loading — this arm is unreachable
         Commands::Reset { .. } => unreachable!(),
+        #[cfg(feature = "tui")]
+        Commands::Tui => {
+            temm1e_tui::launch_tui(config).await?;
+        }
     }
 
     Ok(())

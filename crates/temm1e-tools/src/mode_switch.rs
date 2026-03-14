@@ -1,6 +1,6 @@
 //! Mode switch tool — toggles Temm1e's personality mode at runtime.
 //!
-//! The agent can use this tool to switch between PLAY mode (:3) and WORK mode (>:3).
+//! The agent can use this tool to switch between PLAY mode (:3), WORK mode (>:3), and PRO mode (professional).
 
 use std::sync::Arc;
 
@@ -32,9 +32,9 @@ impl Tool for ModeSwitchTool {
     }
 
     fn description(&self) -> &str {
-        "Switch Temm1e's personality mode between PLAY (warm, chaotic, :3) and \
-         WORK (sharp, analytical, >:3). Use this when the user asks to change \
-         the vibe or when a task requires a different energy."
+        "Switch Temm1e's personality mode between PLAY (warm, chaotic, :3), \
+         WORK (sharp, analytical, >:3), or PRO (professional, no emoticons). \
+         Use this when the user asks to change the vibe or when a task requires a different energy."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -43,8 +43,8 @@ impl Tool for ModeSwitchTool {
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["play", "work"],
-                    "description": "The personality mode to switch to: 'play' for warm/chaotic energy, 'work' for sharp/analytical precision"
+                    "enum": ["play", "work", "pro"],
+                    "description": "The personality mode to switch to: 'play' for warm/chaotic energy, 'work' for sharp/analytical precision, 'pro' for professional/business tone"
                 }
             },
             "required": ["mode"]
@@ -73,9 +73,10 @@ impl Tool for ModeSwitchTool {
         let new_mode = match mode_str.to_lowercase().as_str() {
             "play" => Temm1eMode::Play,
             "work" => Temm1eMode::Work,
+            "pro" => Temm1eMode::Pro,
             other => {
                 return Ok(ToolOutput {
-                    content: format!("Unknown mode '{}'. Valid modes: play, work", other),
+                    content: format!("Unknown mode '{}'. Valid modes: play, work, pro", other),
                     is_error: true,
                 });
             }
@@ -93,6 +94,7 @@ impl Tool for ModeSwitchTool {
         let message = match new_mode {
             Temm1eMode::Play => "Mode switched to PLAY! Let's have some fun! :3".to_string(),
             Temm1eMode::Work => "Mode switched to WORK. Ready to execute. >:3".to_string(),
+            Temm1eMode::Pro => "Mode switched to PRO. Professional mode engaged.".to_string(),
         };
 
         Ok(ToolOutput {
@@ -148,6 +150,20 @@ mod tests {
         assert!(output.content.contains("WORK"));
         assert!(output.content.contains(">:3"));
         assert_eq!(*mode.read().await, Temm1eMode::Work);
+    }
+
+    #[tokio::test]
+    async fn switch_to_pro() {
+        let mode = Arc::new(RwLock::new(Temm1eMode::Play));
+        let tool = ModeSwitchTool::new(mode.clone());
+        let ctx = test_ctx();
+
+        let input = make_input(serde_json::json!({"mode": "pro"}));
+        let output = tool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.content.contains("PRO"));
+        assert!(!output.content.contains(":3"));
+        assert_eq!(*mode.read().await, Temm1eMode::Pro);
     }
 
     #[tokio::test]

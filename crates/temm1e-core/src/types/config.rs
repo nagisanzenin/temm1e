@@ -13,6 +13,8 @@ pub enum Temm1eMode {
     Play,
     /// WORK mode — sharp, analytical, precise, >:3-permitted
     Work,
+    /// PRO mode — professional, business-grade, no emoticons
+    Pro,
 }
 
 impl std::fmt::Display for Temm1eMode {
@@ -20,6 +22,7 @@ impl std::fmt::Display for Temm1eMode {
         match self {
             Temm1eMode::Play => write!(f, "PLAY :3"),
             Temm1eMode::Work => write!(f, "WORK >:3"),
+            Temm1eMode::Pro => write!(f, "PRO"),
         }
     }
 }
