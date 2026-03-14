@@ -290,6 +290,7 @@ impl BrowserTool {
             .arg("--disable-gpu")
             .arg("--no-sandbox")
             .arg("--disable-dev-shm-usage")
+            .arg("--disable-setuid-sandbox")
             // Anti-detection flags
             .arg("--disable-blink-features=AutomationControlled")
             .arg("--disable-infobars")
@@ -297,6 +298,13 @@ impl BrowserTool {
             .arg("--disable-backgrounding-occluded-windows")
             .arg("--disable-renderer-backgrounding")
             .arg("--disable-ipc-flooding-protection")
+            // Stability flags for Windows
+            .arg("--disable-extensions")
+            .arg("--disable-plugins")
+            .arg("--disable-software-rasterizer")
+            .arg("--disable-web-security")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
             .arg(format!("--user-agent={}", STEALTH_USER_AGENT))
             .arg("--lang=en-US,en")
             // Realistic window size (1920x1080 is common)
@@ -640,7 +648,17 @@ impl Tool for BrowserTool {
             });
         }
 
-        let page = self.ensure_browser().await?;
+        let page = self.ensure_browser().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to ensure browser");
+            Temm1eError::Tool(format!(
+                "Browser initialization failed: {}. \
+                 This may be due to Chrome not being installed, insufficient permissions, \
+                 or antivirus software blocking Chrome. \
+                 Try: 1) Verify Chrome is installed, 2) Run as administrator, \
+                 3) Check antivirus settings.",
+                e
+            ))
+        })?;
         self.last_used
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
 
