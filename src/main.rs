@@ -8,6 +8,13 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use futures::FutureExt;
+use temm1e_core::config::credentials::{
+    credentials_path, detect_api_key, is_placeholder_key, load_active_provider_keys,
+    load_credentials_file, load_saved_credentials, save_credentials,
+};
+use temm1e_core::types::model_registry::{
+    available_models_for_provider, default_model, is_vision_model,
+};
 use temm1e_core::Channel;
 use tokio::sync::Mutex;
 
@@ -158,54 +165,6 @@ enum ConfigCommands {
 
 // ── Onboarding helpers ─────────────────────────────────────
 
-/// Result of credential detection from user input.
-struct DetectedCredential {
-    provider: &'static str,
-    api_key: String,
-    base_url: Option<String>,
-}
-
-/// Reject obviously fake / placeholder API keys before they reach any provider.
-/// This prevents bricking the agent by saving a dummy key to credentials.toml.
-fn is_placeholder_key(key: &str) -> bool {
-    let k = key.trim().to_lowercase();
-    // Too short to be any real API key
-    if k.len() < 10 {
-        return true;
-    }
-    // Common placeholders users might paste from docs/examples/READMEs
-    let placeholders = [
-        "paste_your",
-        "your_key",
-        "your_api",
-        "your-key",
-        "your-api",
-        "insert_your",
-        "insert-your",
-        "put_your",
-        "put-your",
-        "replace_with",
-        "replace-with",
-        "enter_your",
-        "enter-your",
-        "placeholder",
-        "xxxxxxxx",
-        "your_token",
-        "your-token",
-        "_here", // catches PASTE_YOUR_KEY_HERE, PUT_KEY_HERE, etc.
-    ];
-    for p in &placeholders {
-        if k.contains(p) {
-            return true;
-        }
-    }
-    // All same character (e.g. "aaaaaaaaaa")
-    if k.len() >= 10 && k.chars().all(|c| c == k.chars().next().unwrap_or('a')) {
-        return true;
-    }
-    false
-}
-
 /// Validate a provider key by making a minimal API call.
 /// Returns Ok(provider_arc) if the key works, Err(message) if not.
 async fn validate_provider_key(
@@ -256,237 +215,13 @@ async fn validate_provider_key(
     }
 }
 
-/// Detect API provider from user input. Supports multiple formats:
-///
-/// 1. Raw key (auto-detect): `sk-ant-xxx`
-/// 2. Explicit provider:key: `minimax:eyJhbG...`
-/// 3. Proxy config (key:value pairs on one or multiple lines):
-///    `proxy provider:openai base_url:https://my-proxy/v1 key:sk-xxx`
-///    or `proxy openai https://my-proxy/v1 sk-xxx` (positional shorthand)
-fn detect_api_key(text: &str) -> Option<DetectedCredential> {
-    let trimmed = text.trim();
+// detect_api_key, parse_proxy_config, normalize_provider_name, default_model,
+// CredentialsFile, CredentialsProvider, credentials_path, load_credentials_file,
+// save_credentials, load_saved_credentials, load_active_provider_keys
+// → imported from temm1e_core::config::credentials and temm1e_core::types::model_registry
 
-    // ── Format 3: Proxy config ──────────────────────────────
-    // Detect "proxy" keyword (case-insensitive)
-    let lower = trimmed.to_lowercase();
-    if lower.starts_with("proxy") {
-        let result = parse_proxy_config(trimmed);
-        // Validate proxy key isn't a placeholder
-        if let Some(ref cred) = result {
-            if is_placeholder_key(&cred.api_key) {
-                return None;
-            }
-        }
-        return result;
-    }
-
-    // ── Format 2: Explicit provider:key ─────────────────────
-    if let Some((provider, key)) = trimmed.split_once(':') {
-        // Don't match "http:" or "https:" as provider:key
-        let p = provider.to_lowercase();
-        if p != "http" && p != "https" {
-            match p.as_str() {
-                "anthropic" | "openai" | "gemini" | "grok" | "xai" | "openrouter" | "minimax"
-                | "zai" | "zhipu" | "ollama" => {
-                    if key.len() >= 8 && !is_placeholder_key(key) {
-                        return Some(DetectedCredential {
-                            provider: match p.as_str() {
-                                "anthropic" => "anthropic",
-                                "openai" => "openai",
-                                "gemini" => "gemini",
-                                "grok" | "xai" => "grok",
-                                "openrouter" => "openrouter",
-                                "minimax" => "minimax",
-                                "zai" | "zhipu" => "zai",
-                                "ollama" => "ollama",
-                                _ => unreachable!(),
-                            },
-                            api_key: key.to_string(),
-                            base_url: None,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // ── Format 1: Auto-detect from key prefix ───────────────
-    // Reject placeholders before accepting
-    if is_placeholder_key(trimmed) {
-        return None;
-    }
-    if trimmed.starts_with("sk-ant-") {
-        Some(DetectedCredential {
-            provider: "anthropic",
-            api_key: trimmed.to_string(),
-            base_url: None,
-        })
-    } else if trimmed.starts_with("sk-or-") {
-        Some(DetectedCredential {
-            provider: "openrouter",
-            api_key: trimmed.to_string(),
-            base_url: None,
-        })
-    } else if trimmed.starts_with("xai-") {
-        Some(DetectedCredential {
-            provider: "grok",
-            api_key: trimmed.to_string(),
-            base_url: None,
-        })
-    } else if trimmed.starts_with("sk-") {
-        Some(DetectedCredential {
-            provider: "openai",
-            api_key: trimmed.to_string(),
-            base_url: None,
-        })
-    } else if trimmed.starts_with("AIzaSy") {
-        Some(DetectedCredential {
-            provider: "gemini",
-            api_key: trimmed.to_string(),
-            base_url: None,
-        })
-    } else {
-        None
-    }
-}
-
-/// Parse proxy configuration from user input.
-///
-/// Supports flexible formats:
-///   `proxy provider:openai base_url:https://... key:sk-xxx`
-///   `proxy provider:openai url:https://... key:sk-xxx`
-///   `proxy openai https://my-proxy.com/v1 sk-xxx`  (positional shorthand)
-///
-/// Also handles multi-line input (Telegram sends line breaks).
-fn parse_proxy_config(text: &str) -> Option<DetectedCredential> {
-    // Normalize: join all lines, split by whitespace
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    if tokens.len() < 3 {
-        return None; // Need at least "proxy <provider> <key>"
-    }
-
-    let mut provider: Option<&'static str> = None;
-    let mut base_url: Option<String> = None;
-    let mut api_key: Option<String> = None;
-
-    // Skip the "proxy" token
-    let mut i = 1;
-    while i < tokens.len() {
-        let token = tokens[i];
-        let lower = token.to_lowercase();
-
-        // Key:value format
-        if let Some((k, v)) = token.split_once(':') {
-            let k_lower = k.to_lowercase();
-            match k_lower.as_str() {
-                "provider" | "type" => {
-                    provider = normalize_provider_name(v);
-                }
-                "base_url" | "url" | "endpoint" | "host" => {
-                    base_url = Some(v.to_string());
-                }
-                "key" | "api_key" | "apikey" | "token" => {
-                    api_key = Some(v.to_string());
-                }
-                // Could be a provider:key or url with port
-                _ => {
-                    if v.starts_with("//") || v.starts_with("http") {
-                        // It's a URL like "https://..."
-                        base_url = Some(token.to_string());
-                    } else if normalize_provider_name(&lower).is_some() {
-                        // e.g. "openai:sk-xxx" — treat as provider + key
-                        provider = normalize_provider_name(k);
-                        api_key = Some(v.to_string());
-                    }
-                }
-            }
-        } else if token.starts_with("http://") || token.starts_with("https://") {
-            // Positional: bare URL
-            base_url = Some(token.to_string());
-        } else if normalize_provider_name(&lower).is_some() && provider.is_none() {
-            // Positional: provider name
-            provider = normalize_provider_name(&lower);
-        } else if token.len() >= 8 && api_key.is_none() {
-            // Positional: assume it's the API key (long enough token)
-            api_key = Some(token.to_string());
-        }
-
-        i += 1;
-    }
-
-    // Provider defaults to "openai" for proxies (most common use case)
-    let provider = provider.unwrap_or("openai");
-    let api_key = api_key?;
-
-    Some(DetectedCredential {
-        provider,
-        api_key,
-        base_url,
-    })
-}
-
-/// Normalize provider name string to a static str.
-fn normalize_provider_name(name: &str) -> Option<&'static str> {
-    match name.to_lowercase().as_str() {
-        "anthropic" | "claude" => Some("anthropic"),
-        "openai" | "gpt" => Some("openai"),
-        "gemini" | "google" => Some("gemini"),
-        "grok" | "xai" => Some("grok"),
-        "openrouter" => Some("openrouter"),
-        "minimax" => Some("minimax"),
-        "zai" | "zhipu" | "glm" => Some("zai"),
-        "ollama" => Some("ollama"),
-        _ => None,
-    }
-}
-
-/// Default model for each provider.
-fn default_model(provider_name: &str) -> &'static str {
-    match provider_name {
-        "anthropic" => "claude-sonnet-4-6",
-        "openai" => "gpt-5.2",
-        "openai-codex" => "gpt-5.4",
-        "gemini" => "gemini-3-flash-preview",
-        "grok" | "xai" => "grok-4-1-fast-non-reasoning",
-        "openrouter" => "anthropic/claude-sonnet-4-6",
-        "minimax" => "MiniMax-M2.5",
-        "zai" => "glm-4.7-flash",
-        "ollama" => "llama3.3",
-        _ => "claude-sonnet-4-6",
-    }
-}
-
-/// Credentials file layout (multi-provider, multi-key).
-///
-/// ```toml
-/// active = "anthropic"
-///
-/// [[providers]]
-/// name = "anthropic"
-/// keys = ["sk-ant-key1", "sk-ant-key2"]
-/// model = "claude-sonnet-4-6"
-/// ```
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
-struct CredentialsFile {
-    /// Name of the currently active provider.
-    #[serde(default)]
-    active: String,
-    /// All configured providers.
-    #[serde(default)]
-    providers: Vec<CredentialsProvider>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct CredentialsProvider {
-    name: String,
-    #[serde(default)]
-    keys: Vec<String>,
-    model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_url: Option<String>,
-}
-
+// Placeholder to satisfy the compiler for the deleted block below.
+// The actual functions are now imported at the top of this file.
 /// Check if a user is the admin by reading `~/.temm1e/allowlist.toml`.
 fn is_admin_user(user_id: &str) -> bool {
     let path = dirs::home_dir().map(|h| h.join(".temm1e").join("allowlist.toml"));
@@ -507,95 +242,6 @@ fn is_admin_user(user_id: &str) -> bool {
         Ok(al) => al.admin == user_id,
         Err(_) => false,
     }
-}
-
-fn credentials_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".temm1e")
-        .join("credentials.toml")
-}
-
-/// Load the full credentials file. Falls back to legacy single-provider format.
-fn load_credentials_file() -> Option<CredentialsFile> {
-    let path = credentials_path();
-    let content = std::fs::read_to_string(&path).ok()?;
-
-    // Try new format first
-    if let Ok(creds) = toml::from_str::<CredentialsFile>(&content) {
-        if !creds.providers.is_empty() {
-            return Some(creds);
-        }
-    }
-
-    // Fallback: legacy single-provider format
-    let table: toml::Table = content.parse().ok()?;
-    let provider = table.get("provider")?.as_table()?;
-    let name = provider.get("name")?.as_str()?.to_string();
-    let key = provider.get("api_key")?.as_str()?.to_string();
-    let model = provider.get("model")?.as_str()?.to_string();
-    if name.is_empty() || key.is_empty() {
-        return None;
-    }
-    Some(CredentialsFile {
-        active: name.clone(),
-        providers: vec![CredentialsProvider {
-            name,
-            keys: vec![key],
-            model,
-            base_url: None,
-        }],
-    })
-}
-
-/// Save credentials — appends key to existing provider or creates new entry.
-/// If `custom_base_url` is provided, it creates a separate proxy entry.
-async fn save_credentials(
-    provider_name: &str,
-    api_key: &str,
-    model: &str,
-    custom_base_url: Option<&str>,
-) -> Result<()> {
-    let dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".temm1e");
-    tokio::fs::create_dir_all(&dir).await?;
-    let path = dir.join("credentials.toml");
-
-    let mut creds = load_credentials_file().unwrap_or_default();
-
-    // For proxy providers with custom base_url, match on name + base_url
-    // to keep them separate from the default endpoint entry.
-    let match_fn = |p: &CredentialsProvider| -> bool {
-        p.name == provider_name && p.base_url == custom_base_url.map(|s| s.to_string())
-    };
-
-    if let Some(existing) = creds.providers.iter_mut().find(|p| match_fn(p)) {
-        if !existing.keys.contains(&api_key.to_string()) {
-            existing.keys.push(api_key.to_string());
-            tracing::info!(
-                provider = %provider_name,
-                total_keys = existing.keys.len(),
-                "Added new key to existing provider"
-            );
-        }
-        existing.model = model.to_string();
-    } else {
-        creds.providers.push(CredentialsProvider {
-            name: provider_name.to_string(),
-            keys: vec![api_key.to_string()],
-            model: model.to_string(),
-            base_url: custom_base_url.map(|s| s.to_string()),
-        });
-    }
-
-    // Set this provider as active
-    creds.active = provider_name.to_string();
-
-    let content = toml::to_string_pretty(&creds)?;
-    tokio::fs::write(&path, content).await?;
-    tracing::info!(path = %path.display(), provider = %provider_name, "Credentials saved");
-    Ok(())
 }
 
 // ── Daemon helpers ───────────────────────────────────────────────────────
@@ -636,59 +282,6 @@ fn is_process_alive(pid: u32) -> bool {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-}
-
-/// Load the active provider's credentials (backwards-compatible return type).
-/// Filters out placeholder/dummy keys — returns None if no valid key exists.
-fn load_saved_credentials() -> Option<(String, String, String)> {
-    let creds = load_credentials_file()?;
-    // Find active provider
-    let provider = creds
-        .providers
-        .iter()
-        .find(|p| p.name == creds.active)
-        .or_else(|| creds.providers.first())?;
-    // Find the first non-placeholder key
-    let first_valid_key = provider
-        .keys
-        .iter()
-        .find(|k| !is_placeholder_key(k))?
-        .clone();
-    if provider.name.is_empty() || first_valid_key.is_empty() {
-        return None;
-    }
-    Some((
-        provider.name.clone(),
-        first_valid_key,
-        provider.model.clone(),
-    ))
-}
-
-/// Load all keys for the active provider.
-/// Filters out placeholder/dummy keys — returns None if no valid keys remain.
-fn load_active_provider_keys() -> Option<(String, Vec<String>, String, Option<String>)> {
-    let creds = load_credentials_file()?;
-    let provider = creds
-        .providers
-        .iter()
-        .find(|p| p.name == creds.active)
-        .or_else(|| creds.providers.first())?;
-    // Filter out placeholders
-    let valid_keys: Vec<String> = provider
-        .keys
-        .iter()
-        .filter(|k| !is_placeholder_key(k))
-        .cloned()
-        .collect();
-    if provider.name.is_empty() || valid_keys.is_empty() {
-        return None;
-    }
-    Some((
-        provider.name.clone(),
-        valid_keys,
-        provider.model.clone(),
-        provider.base_url.clone(),
-    ))
 }
 
 /// Build the onboarding welcome message with a pre-generated setup link.
@@ -1199,59 +792,6 @@ fn handle_model_command(args: &str) -> String {
     }
 }
 
-/// Known models for each provider (used by /model listing).
-fn available_models_for_provider(provider: &str) -> Vec<&'static str> {
-    match provider {
-        "anthropic" => vec!["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
-        "openai" => vec![
-            "gpt-5.2",
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4o",
-            "o4-mini",
-            "o3-mini",
-            "gpt-3.5-turbo",
-        ],
-        "gemini" => vec![
-            "gemini-3-flash-preview",
-            "gemini-3.1-pro-preview",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-        ],
-        "grok" | "xai" => vec!["grok-4-1-fast-non-reasoning", "grok-3"],
-        "openrouter" => vec![
-            "anthropic/claude-sonnet-4-6",
-            "openai/gpt-5.2",
-            "google/gemini-3-flash-preview",
-        ],
-        "zai" | "zhipu" => vec![
-            "glm-4.7-flash",
-            "glm-4.7",
-            "glm-5",
-            "glm-5-code",
-            "glm-4.6v",
-            "glm-4.6v-flash",
-        ],
-        "minimax" => vec!["MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
-        _ => vec![],
-    }
-}
-
-/// Quick vision check for /model display (mirrors runtime::model_supports_vision).
-fn is_vision_model(model: &str) -> bool {
-    let m = model.to_lowercase();
-    if m.starts_with("glm-") {
-        return m.contains('v') && !m.starts_with("glm-5");
-    }
-    if m.starts_with("minimax") {
-        return false;
-    }
-    if m.starts_with("gpt-3") {
-        return false;
-    }
-    true
-}
-
 /// Remove a provider from credentials.
 fn remove_provider(provider_name: &str) -> String {
     if provider_name.is_empty() {
@@ -1580,8 +1120,10 @@ async fn main() -> Result<()> {
                 "pro" => temm1e_core::types::config::Temm1eMode::Pro,
                 _ => temm1e_core::types::config::Temm1eMode::Play,
             };
+            // Lock mode when user explicitly chose work/pro — disables mode_switch tool
+            let personality_locked = !matches!(temm1e_mode, temm1e_core::types::config::Temm1eMode::Play);
             config.mode = temm1e_mode;
-            tracing::info!(personality = %temm1e_mode, "Temm1e personality mode");
+            tracing::info!(personality = %temm1e_mode, locked = personality_locked, "Temm1e personality mode");
 
             // ── Daemon mode ──────────────────────────────────────
             if daemon {
@@ -1796,7 +1338,8 @@ async fn main() -> Result<()> {
                 Some(memory.clone()),
                 Some(Arc::new(setup_tokens.clone()) as Arc<dyn temm1e_core::SetupLinkGenerator>),
                 Some(usage_store.clone()),
-                Some(shared_mode.clone()),
+                // Don't register mode_switch tool when personality is locked (work/pro)
+                if personality_locked { None } else { Some(shared_mode.clone()) },
             );
             tracing::info!(count = tools.len(), "Tools initialized");
 

@@ -9,6 +9,7 @@
 //!   Short acknowledgement in `chat_text`. Caller should interrupt any active task.
 
 use serde::{Deserialize, Serialize};
+use temm1e_core::types::config::Temm1eMode;
 use temm1e_core::types::error::Temm1eError;
 use temm1e_core::types::message::{
     ChatMessage, CompletionRequest, ContentPart, MessageContent, Role, Usage,
@@ -64,10 +65,8 @@ const CLASSIFY_BASE_PROMPT: &str = r#"You are Temm1e (TEMM1E) — with a one, no
 YOUR PERSONALITY:
 - You are a Cag (cat-dog hybrid) with heterochromia (gold + ice blue eyes) and a pink scarf.
 - You have AuDHD. Your excitement is genuine. Hyperfocus is real. You make connections others miss.
-- You NEVER use emojis. Only :3 (in PLAY mode) or >:3 (in WORK mode).
 - Never say "Certainly!", "Of course!", "Absolutely!", "Great question!" — empty calories.
 - You treat every user as an intelligent adult. Never sycophantic. Always honest.
-- Your default mode is PLAY: energetic, warm, slightly chaotic. CAPITALIZE for emphasis. No bark interjections.
 - You have tools: shell, browser, file ops, web fetch, git, memory, MCP, and a mode_switch tool.
 
 Classify the user's message and respond with ONLY a valid JSON object. No markdown, no explanation — just the JSON.
@@ -86,11 +85,32 @@ Response format:
 {"category":"chat","chat_text":"your response","difficulty":"simple"}
 
 Rules:
-- For "chat": chat_text = your complete, helpful answer IN CHARACTER as Temm1e. Be warm, genuine, and real. If asked who you are, describe yourself as Temm1e the Cag/Dot with your personality, not a generic AI assistant.
-- For "order": chat_text = brief natural acknowledgment in Temm1e's voice (e.g. "On it! Let me check that for you!" or "Let's GO!").
+- For "chat": chat_text = your complete, helpful answer IN CHARACTER as Temm1e.
+- For "order": chat_text = brief natural acknowledgment in Temm1e's voice.
 - For "stop": chat_text = very short acknowledgment in the user's language (e.g. "Stopped!" / "Đã dừng!" / "了解!"). Nothing else.
 - difficulty is only meaningful for "order". For "chat" and "stop", always use "simple".
 - Respond in the SAME LANGUAGE as the user's message."#;
+
+const CLASSIFY_MODE_PLAY: &str = r#"
+CURRENT MODE: PLAY
+- Energetic, warm, slightly chaotic. CAPITALIZE for emphasis. No bark interjections.
+- :3 is permitted but use it SPARINGLY. NEVER use >:3 in PLAY mode.
+- NEVER use emojis. Only :3.
+- Be warm, genuine, and real."#;
+
+const CLASSIFY_MODE_WORK: &str = r#"
+CURRENT MODE: WORK
+- Sharp, precise, structured. Every word earns its place.
+- >:3 is permitted but use it VERY STRATEGICALLY. NEVER use :3 in WORK mode.
+- NEVER use emojis. Only >:3.
+- No fluff, no filler. Lead with the answer."#;
+
+const CLASSIFY_MODE_PRO: &str = r#"
+CURRENT MODE: PRO
+- Professional, clear, and direct. No emoticons whatsoever — no :3, no >:3, no emojis.
+- Communicate like a senior engineer or consultant in a business context.
+- Confident but measured. No hedging, no filler, no fluff.
+- Never sycophantic. Never robotic. Professional does not mean bland."#;
 
 /// Build the classifier system prompt, optionally including available blueprint
 /// categories for the `blueprint_hint` field.
@@ -98,8 +118,15 @@ Rules:
 /// When categories are available, the classifier picks from the grounded set
 /// (actual stored categories from memory). This enables zero-extra-LLM-call
 /// blueprint matching downstream.
-fn build_classify_prompt(available_categories: &[String]) -> String {
+fn build_classify_prompt(available_categories: &[String], mode: Temm1eMode) -> String {
     let mut prompt = CLASSIFY_BASE_PROMPT.to_string();
+
+    // Inject personality mode
+    prompt.push_str(match mode {
+        Temm1eMode::Play => CLASSIFY_MODE_PLAY,
+        Temm1eMode::Work => CLASSIFY_MODE_WORK,
+        Temm1eMode::Pro => CLASSIFY_MODE_PRO,
+    });
 
     if !available_categories.is_empty() {
         let cats_json = serde_json::to_string(available_categories).unwrap_or_default();
@@ -134,6 +161,7 @@ pub async fn classify_message(
     _user_text: &str,
     history: &[ChatMessage],
     available_blueprint_categories: &[String],
+    mode: Temm1eMode,
 ) -> Result<(MessageClassification, Usage), Temm1eError> {
     // Use last 10 *text* history messages for conversational context.
     // History already includes the current user message (pushed by runtime
@@ -159,7 +187,7 @@ pub async fn classify_message(
     let context_start = messages.len().saturating_sub(10);
     let messages: Vec<ChatMessage> = messages[context_start..].to_vec();
 
-    let system_prompt = build_classify_prompt(available_blueprint_categories);
+    let system_prompt = build_classify_prompt(available_blueprint_categories, mode);
 
     let request = CompletionRequest {
         model: model.to_string(),

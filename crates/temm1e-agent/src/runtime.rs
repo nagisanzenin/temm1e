@@ -424,12 +424,18 @@ impl AgentRuntime {
         //   Chat  → return immediately with the LLM's response (1 call total).
         //   Order → send acknowledgment via reply_tx, then run the agentic pipeline.
         let execution_profile = if self.v2_optimizations {
+            // Read current mode for classifier voice injection
+            let current_mode = match &self.shared_mode {
+                Some(m) => *m.read().await,
+                None => Temm1eMode::Play,
+            };
             match crate::llm_classifier::classify_message(
                 self.provider.as_ref(),
                 &self.model,
                 &user_text,
                 &session.history,
                 &blueprint_categories,
+                current_mode,
             )
             .await
             {
@@ -949,7 +955,9 @@ impl AgentRuntime {
                 // a redundant summary ("I sent you..."). Suppress it to avoid
                 // duplicate messages.
                 if send_message_used && !reply_text.trim().is_empty() {
-                    info!("Suppressing final reply — send_message already delivered content to user");
+                    info!(
+                        "Suppressing final reply — send_message already delivered content to user"
+                    );
                     reply_text.clear();
                 }
 
@@ -1130,7 +1138,9 @@ impl AgentRuntime {
                             });
 
                             // Notify user that the blueprint is being refined
-                            reply_text.push_str("\n\n_Blueprint updated — workflow refined based on this run._");
+                            reply_text.push_str(
+                                "\n\n_Blueprint updated — workflow refined based on this run._",
+                            );
                         }
                     }
                 }
@@ -1357,8 +1367,9 @@ impl AgentRuntime {
                             );
                             // Append to last ToolResult (not .last_mut() which
                             // could be an Image from vision injection).
-                            if let Some(ContentPart::ToolResult { content, .. }) =
-                                tool_result_parts.iter_mut().rfind(|p| matches!(p, ContentPart::ToolResult { .. }))
+                            if let Some(ContentPart::ToolResult { content, .. }) = tool_result_parts
+                                .iter_mut()
+                                .rfind(|p| matches!(p, ContentPart::ToolResult { .. }))
                             {
                                 content.push_str(&notice);
                             }
@@ -1379,8 +1390,9 @@ impl AgentRuntime {
             };
 
             if should_verify {
-                if let Some(ContentPart::ToolResult { content, .. }) =
-                    tool_result_parts.iter_mut().rfind(|p| matches!(p, ContentPart::ToolResult { .. }))
+                if let Some(ContentPart::ToolResult { content, .. }) = tool_result_parts
+                    .iter_mut()
+                    .rfind(|p| matches!(p, ContentPart::ToolResult { .. }))
                 {
                     content.push_str(
                         "\n\n[VERIFICATION REQUIRED] Review the tool output(s) above. Before proceeding:\n\
