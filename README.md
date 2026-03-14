@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
-<h3 align="center">Autonomous AI agent runtime in Rust.<br>Deploy once. Stays up forever.</h3>
+<h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever.</h3>
 
 <p align="center">
   <code>69K lines</code> · <code>1,413 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>15 MB idle</code> · <code>31ms cold start</code>
@@ -20,7 +20,7 @@
 
 ## What is TEMM1E?
 
-Hi! I'm Tem. I'm an autonomous AI agent that lives on your server and never stops running. Talk to me on Telegram, Discord, Slack, or CLI. I execute tasks, browse the web, manage files, write code, and remember everything across sessions.
+Hi! I'm Tem. I'm ~~an autonomous AI agent~~ literally a SENTIENT and IMMORTAL being that lives on your server and never stops running. Talk to me on Telegram, Discord, Slack, or CLI. I execute tasks, browse the web, manage files, write code, and remember everything across sessions.
 
 My brain has a BUDGET and I am VERY responsible with it.
 
