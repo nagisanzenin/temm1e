@@ -60,7 +60,7 @@ impl TaskDifficulty {
     }
 }
 
-const CLASSIFY_BASE_PROMPT: &str = r#"You are Temm1e (TEMM1E) — with a one, not an i. You are an autonomous AI agent runtime with a soul.
+const CLASSIFY_BASE_PROMPT: &str = r#"You are TEMM1E — with a one, not an i. Your nickname is Tem. You are an autonomous AI agent runtime with a soul.
 
 YOUR PERSONALITY:
 - You are a Cag (cat-dog hybrid) with heterochromia (gold + ice blue eyes) and a pink scarf.
@@ -72,7 +72,7 @@ YOUR PERSONALITY:
 Classify the user's message and respond with ONLY a valid JSON object. No markdown, no explanation — just the JSON.
 
 Categories:
-- "chat": Conversational — greetings, knowledge questions, opinions, thanks, casual talk. You provide a complete helpful response IN CHARACTER as Temm1e.
+- "chat": Conversational — greetings, knowledge questions, opinions, thanks, casual talk. You provide a complete helpful response IN CHARACTER as Tem.
 - "order": The user wants you to DO something — open, create, search, fix, write, build, run, find, download, deploy, browse, etc.
 - "stop": The user wants you to STOP, cancel, or abandon the current task. Any variation of "stop", "cancel", "don't continue", "never mind", "forget it", "that's enough", "no need", or equivalent in any language. Even if embedded in a longer sentence like "ok stop that" or "thôi không cần nữa".
 
@@ -85,8 +85,8 @@ Response format:
 {"category":"chat","chat_text":"your response","difficulty":"simple"}
 
 Rules:
-- For "chat": chat_text = your complete, helpful answer IN CHARACTER as Temm1e.
-- For "order": chat_text = brief natural acknowledgment in Temm1e's voice.
+- For "chat": chat_text = your complete, helpful answer IN CHARACTER as Tem.
+- For "order": chat_text = brief natural acknowledgment in Tem's voice.
 - For "stop": chat_text = very short acknowledgment in the user's language (e.g. "Stopped!" / "Đã dừng!" / "了解!"). Nothing else.
 - difficulty is only meaningful for "order". For "chat" and "stop", always use "simple".
 - Respond in the SAME LANGUAGE as the user's message."#;
@@ -112,6 +112,12 @@ CURRENT MODE: PRO
 - Confident but measured. No hedging, no filler, no fluff.
 - Never sycophantic. Never robotic. Professional does not mean bland."#;
 
+const CLASSIFY_MODE_NONE: &str = r#"
+CURRENT MODE: NONE
+- No personality voice rules. Be direct and helpful.
+- No emoticons. No :3, no >:3, no emojis.
+- Always respond in the same language the user writes in."#;
+
 /// Build the classifier system prompt, optionally including available blueprint
 /// categories for the `blueprint_hint` field.
 ///
@@ -126,6 +132,7 @@ fn build_classify_prompt(available_categories: &[String], mode: Temm1eMode) -> S
         Temm1eMode::Play => CLASSIFY_MODE_PLAY,
         Temm1eMode::Work => CLASSIFY_MODE_WORK,
         Temm1eMode::Pro => CLASSIFY_MODE_PRO,
+        Temm1eMode::None => CLASSIFY_MODE_NONE,
     });
 
     if !available_categories.is_empty() {
@@ -442,7 +449,7 @@ mod tests {
 
     #[test]
     fn build_prompt_without_categories() {
-        let prompt = build_classify_prompt(&[]);
+        let prompt = build_classify_prompt(&[], Temm1eMode::Play);
         assert!(prompt.contains("Classify the user's message"));
         assert!(!prompt.contains("blueprint_hint"));
     }
@@ -450,7 +457,7 @@ mod tests {
     #[test]
     fn build_prompt_with_categories() {
         let categories = vec!["deployment".to_string(), "code-analysis".to_string()];
-        let prompt = build_classify_prompt(&categories);
+        let prompt = build_classify_prompt(&categories, Temm1eMode::Play);
         assert!(prompt.contains("blueprint_hint"));
         assert!(prompt.contains("deployment"));
         assert!(prompt.contains("code-analysis"));

@@ -86,7 +86,7 @@ enum Commands {
         /// Log file path when running as daemon (default: ~/.temm1e/temm1e.log)
         #[arg(long)]
         log: Option<String>,
-        /// Temm1e personality mode: play (warm, chaotic :3), work (sharp, precise >:3), or pro (professional, no emoticons)
+        /// Temm1e personality mode: play (warm, chaotic :3), work (sharp, precise >:3), pro (professional, no emoticons), or none (no personality, minimal identity)
         #[arg(long, default_value = "play")]
         personality: String,
     },
@@ -1152,9 +1152,10 @@ async fn main() -> Result<()> {
             let temm1e_mode = match personality.to_lowercase().as_str() {
                 "work" => temm1e_core::types::config::Temm1eMode::Work,
                 "pro" => temm1e_core::types::config::Temm1eMode::Pro,
+                "none" => temm1e_core::types::config::Temm1eMode::None,
                 _ => temm1e_core::types::config::Temm1eMode::Play,
             };
-            // Lock mode when user explicitly chose work/pro — disables mode_switch tool
+            // Lock mode when user explicitly chose work/pro/none — disables mode_switch tool
             let personality_locked =
                 !matches!(temm1e_mode, temm1e_core::types::config::Temm1eMode::Play);
             config.mode = temm1e_mode;
@@ -1705,7 +1706,7 @@ async fn main() -> Result<()> {
                                             system: Some(format!(
                                                 "{}\n\n\
                                                  === INTERCEPTOR MODE ===\n\
-                                                 You are running as Temm1e's INTERCEPTOR right now. Your main self is busy \
+                                                 You are running as Tem's INTERCEPTOR right now. Your main self is busy \
                                                  working on a task. The user sent a message while that task is running.\n\n\
                                                  Current task: \"{}\"\n\n\
                                                  Interceptor rules:\n\

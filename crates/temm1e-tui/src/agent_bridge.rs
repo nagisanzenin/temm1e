@@ -120,6 +120,7 @@ pub async fn spawn_agent(
     let initial_mode = match setup.mode.as_deref() {
         Some("work") => Temm1eMode::Work,
         Some("pro") => Temm1eMode::Pro,
+        Some("none") => Temm1eMode::None,
         _ => Temm1eMode::Play, // "auto" and "play" both start as Play
     };
     let shared_mode: Arc<RwLock<Temm1eMode>> = Arc::new(RwLock::new(initial_mode));

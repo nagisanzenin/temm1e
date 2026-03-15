@@ -15,6 +15,8 @@ pub enum Temm1eMode {
     Work,
     /// PRO mode — professional, business-grade, no emoticons
     Pro,
+    /// NONE mode — no personality, minimal identity prompt only
+    None,
 }
 
 impl std::fmt::Display for Temm1eMode {
@@ -23,6 +25,7 @@ impl std::fmt::Display for Temm1eMode {
             Temm1eMode::Play => write!(f, "PLAY :3"),
             Temm1eMode::Work => write!(f, "WORK >:3"),
             Temm1eMode::Pro => write!(f, "PRO"),
+            Temm1eMode::None => write!(f, "NONE"),
         }
     }
 }

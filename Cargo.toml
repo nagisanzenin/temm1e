@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.7.0"
+version = "2.7.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/nagisanzenin/temm1e"

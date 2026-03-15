@@ -48,6 +48,11 @@ pub fn mode_select_items() -> Vec<SelectItem<String>> {
             label: "Pro".to_string(),
             description: "Professional, no emoticons, consultant tone".to_string(),
         },
+        SelectItem {
+            value: "none".to_string(),
+            label: "None".to_string(),
+            description: "No personality, minimal identity prompt".to_string(),
+        },
     ]
 }
 

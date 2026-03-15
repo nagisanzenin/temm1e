@@ -6,7 +6,7 @@
   <a href="https://github.com/nagisanzenin/temm1e/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/temm1e?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.gg/3ux2c5xz"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-2.7.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.7.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
@@ -67,7 +67,7 @@ My brain has a BUDGET and I am VERY responsible with it.
 - File drag-and-drop — drop a file path into the terminal to attach it
 - Path and URL highlighting (underlined, clickable)
 - Mouse wheel scrolling + PageUp/PageDown through full chat history
-- Personality modes: Auto (recommended), Play :3, Work >:3, Pro
+- Personality modes: Auto (recommended), Play :3, Work >:3, Pro, None (minimal identity)
 - Ctrl+C twice to exit (like Claude Code)
 - Tem's 7-color palette with truecolor/256-color/NO_COLOR degradation
 - Token and cost tracking in the status bar
@@ -357,6 +357,7 @@ export TELEGRAM_BOT_TOKEN="your-token"
 ```
 temm1e tui                   Interactive TUI (--features tui)
 temm1e start                 Start the gateway (foreground or -d for daemon)
+temm1e start --personality none  No personality, minimal identity prompt
 temm1e stop                  Graceful shutdown
 temm1e chat                  Interactive CLI chat (basic, no TUI)
 temm1e status                Show running state
@@ -389,6 +390,8 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
 <summary><strong>Release Timeline</strong> — every version from first breath to now</summary>
 
 ```
+2026-03-15  v2.7.1  ●━━━ Personality None mode — --personality none strips all voice rules, minimal identity prompt, locked mode_switch. Naming fix: TEMM1E/Tem enforced across all prompts
+                    │
 2026-03-15  v2.7.0  ●━━━ Interactive TUI — temm1e-tui crate (ratatui + syntect), arrow-key onboarding, markdown rendering, syntax-highlighted code blocks, agent observability, slash commands, personality modes, mouse scroll, file drag-and-drop, credential extraction to temm1e-core
                     │
 2026-03-14  v2.6.0  ●━━━ Introduce TEMM1E — vision browser (screenshot→LLM→click_at via CDP), Tool trait vision extension, model_supports_vision gating, message dedup fixes, interceptor unlimited output, blueprint notification, Tem identity
