@@ -259,9 +259,20 @@ During shadow testing and production monitoring, the judge is the user's next ac
 | Tool call fails | ToolFailed | disagree (false) |
 | Leaves without responding | Abandoned | disagree (false) |
 
-Retry detection uses Levenshtein edit distance: if the next message has < 30% character-level edit distance from the previous message within 60 seconds, it is classified as a retry. Rejection detection uses keyword matching for phrases like "wrong", "incorrect", "try again", "not what I asked".
+Detection uses a two-tier architecture that combines instant heuristics with semantic understanding:
 
-This costs nothing because these signals are already observable in the message stream. No additional API calls, no additional latency, no additional tokens.
+**Tier 1 — Instant heuristics (< 1ms):**
+- **Retry:** Levenshtein edit distance < 30% within 60 seconds → classified as retry.
+- **Rejection:** Keyword matching for "wrong", "incorrect", "try again" → fast path for obvious rejections.
+
+**Tier 2 — Embedding similarity (~100ms, zero LLM cost):**
+When Tier 1 reports "continued normally," Tier 2 checks semantic signals using the same `nomic-embed-text` model already loaded for evaluation:
+- **Semantic retry:** Cosine similarity > 0.80 between current and previous user message within 60s. Catches paraphrased retries that Levenshtein misses (e.g., "What's the weather?" → "Tell me the temperature outside").
+- **Semantic rejection:** Cosine similarity > 0.75 between the current message and pre-computed rejection prototype embeddings. Catches paraphrased rejections ("that doesn't help at all", "completely useless") and **non-English rejections** across 12 languages.
+
+The rejection prototypes are multilingual anchors covering English, Vietnamese, Japanese, Chinese, Korean, Spanish, French, German, Portuguese, Arabic, Thai, and Indonesian. Modern embedding models encode meaning, not words — a Vietnamese "Sai rồi" or Japanese "違います" produces high cosine similarity to "That's wrong" because the embedding captures the semantic intent (disagreement), not the surface language. This makes Eigen-Tune's behavior judge work globally without language-specific code.
+
+This costs nothing because: (a) user behavior signals are already observable in the message stream, (b) the embedding model is already loaded for evaluation, and (c) prototype embeddings are pre-computed once at startup and cached.
 
 ### Why User-as-Judge is Better than LLM-as-Judge
 
