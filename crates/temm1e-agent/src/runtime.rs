@@ -77,6 +77,9 @@ pub struct AgentRuntime {
     /// When true: complexity classification, prompt stratification,
     /// structured failure injection, and trivial fast-path.
     v2_optimizations: bool,
+    /// Whether hive swarm routing is enabled. When true and classifier says
+    /// Order+Complex, process_message returns HiveRoute error for main.rs to catch.
+    hive_enabled: bool,
     /// Whether executable DAG blueprint phase parallelism is enabled.
     /// When true and a blueprint is matched, its phases are parsed into a
     /// dependency graph and independent phases execute concurrently.
@@ -116,6 +119,7 @@ impl AgentRuntime {
             max_consecutive_failures: 2,
             task_queue: None,
             budget: BudgetTracker::new(0.0),
+            hive_enabled: false,
             model_pricing,
             v2_optimizations: true,
             parallel_phases: false,
@@ -182,6 +186,7 @@ impl AgentRuntime {
             max_consecutive_failures: 2,
             task_queue: None,
             budget: BudgetTracker::new(max_spend_usd),
+            hive_enabled: false,
             model_pricing,
             v2_optimizations: true,
             parallel_phases: false,
@@ -223,6 +228,13 @@ impl AgentRuntime {
     /// structured failure classification, and complexity-scaled output caps.
     pub fn with_v2_optimizations(mut self, enabled: bool) -> Self {
         self.v2_optimizations = enabled;
+        self
+    }
+
+    /// Enable hive swarm routing: when classifier says Order+Complex,
+    /// process_message returns HiveRoute instead of running the tool loop.
+    pub fn with_hive_enabled(mut self, enabled: bool) -> Self {
+        self.hive_enabled = enabled;
         self
     }
 
@@ -534,6 +546,17 @@ impl AgentRuntime {
                             ));
                         }
                         crate::llm_classifier::MessageCategory::Order => {
+                            // ── Hive route: if enabled and Complex, signal swarm ──
+                            if self.hive_enabled
+                                && classification.difficulty
+                                    == crate::llm_classifier::TaskDifficulty::Complex
+                            {
+                                info!("V2: Complex order + hive enabled → routing to swarm");
+                                return Err(Temm1eError::HiveRoute(
+                                    msg.text.clone().unwrap_or_default(),
+                                ));
+                            }
+
                             // ── Order: send ack, then continue pipeline ──
                             // Extract blueprint hint from classifier (v2 matching)
                             blueprint_hint = classification.blueprint_hint.clone();
@@ -560,6 +583,15 @@ impl AgentRuntime {
                     warn!(error = %e, "LLM classification failed, using rule-based fallback");
                     let router = ModelRouter::new(ModelRouterConfig::default());
                     let complexity = router.classify_complexity(&session.history, &[], &user_text);
+
+                    // If hive enabled and fallback says Complex → route to swarm
+                    if self.hive_enabled && matches!(complexity, crate::model_router::TaskComplexity::Complex) {
+                        info!("V2: Fallback classified as Complex + hive enabled → routing to swarm");
+                        return Err(Temm1eError::HiveRoute(
+                            msg.text.clone().unwrap_or_default(),
+                        ));
+                    }
+
                     let profile = complexity.execution_profile();
                     info!(
                         complexity = ?complexity,

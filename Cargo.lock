@@ -4928,6 +4928,7 @@ dependencies = [
  "temm1e-core",
  "temm1e-filestore",
  "temm1e-gateway",
+ "temm1e-hive",
  "temm1e-mcp",
  "temm1e-memory",
  "temm1e-observable",
@@ -5091,6 +5092,25 @@ dependencies = [
  "tower-http",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "temm1e-hive"
+version = "2.8.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temm1e-core",
+ "temm1e-providers",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
  "uuid",
 ]
 

@@ -1421,6 +1421,22 @@ async fn main() -> Result<()> {
 
             let system_prompt = Some(build_system_prompt());
 
+            // Quick check: is [hive] enabled in config? (just the boolean, full init later)
+            let hive_enabled_early = {
+                #[derive(serde::Deserialize, Default)]
+                struct HiveCheck { #[serde(default)] hive: HiveEnabled }
+                #[derive(serde::Deserialize, Default)]
+                struct HiveEnabled { #[serde(default)] enabled: bool }
+
+                config_path
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .or_else(|| dirs::home_dir().and_then(|h| std::fs::read_to_string(h.join(".temm1e/config.toml")).ok()))
+                    .or_else(|| std::fs::read_to_string("temm1e.toml").ok())
+                    .and_then(|content| toml::from_str::<HiveCheck>(&content).ok())
+                    .map(|c| c.hive.enabled)
+                    .unwrap_or(false)
+            };
+
             // ── Agent state (None during onboarding) ───────────
             let agent_state: Arc<tokio::sync::RwLock<Option<Arc<temm1e_agent::AgentRuntime>>>> =
                 Arc::new(tokio::sync::RwLock::new(None));
@@ -1490,6 +1506,7 @@ async fn main() -> Result<()> {
                         )
                         .with_v2_optimizations(config.agent.v2_optimizations)
                         .with_parallel_phases(config.agent.parallel_phases)
+                        .with_hive_enabled(hive_enabled_early)
                         .with_shared_mode(shared_mode.clone())
                         .with_shared_memory_strategy(shared_memory_strategy.clone()),
                     );
@@ -1597,6 +1614,56 @@ async fn main() -> Result<()> {
                 );
             }
 
+            // ── Hive swarm initialization (if enabled) ────────
+            let hive_config: temm1e_hive::HiveConfig = {
+                // Parse [hive] section from the same config file.
+                // If absent or malformed, defaults to enabled=false (inert).
+                let hive_toml = config_path
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .or_else(|| {
+                        let home = dirs::home_dir()?;
+                        std::fs::read_to_string(home.join(".temm1e/config.toml")).ok()
+                    })
+                    .or_else(|| std::fs::read_to_string("temm1e.toml").ok());
+                if let Some(ref content) = hive_toml {
+                    #[derive(serde::Deserialize, Default)]
+                    struct HiveWrapper {
+                        #[serde(default)]
+                        hive: temm1e_hive::HiveConfig,
+                    }
+                    toml::from_str::<HiveWrapper>(content)
+                        .map(|w| w.hive)
+                        .unwrap_or_default()
+                } else {
+                    temm1e_hive::HiveConfig::default()
+                }
+            };
+
+            let hive_instance: Option<Arc<temm1e_hive::Hive>> = if hive_config.enabled {
+                let hive_db = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".temm1e/hive.db");
+                let hive_url = format!("sqlite:{}?mode=rwc", hive_db.display());
+                match temm1e_hive::Hive::new(&hive_config, &hive_url).await {
+                    Ok(h) => {
+                        tracing::info!(
+                            max_workers = hive_config.max_workers,
+                            threshold = hive_config.swarm_threshold_speedup,
+                            "Hive swarm initialized"
+                        );
+                        Some(Arc::new(h))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Hive init failed — swarm disabled");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let hive_enabled_flag = hive_instance.is_some();
+
             // ── Per-chat serial executor ───────────────────────
 
             /// Tracks the active task state for a single chat.
@@ -1629,6 +1696,7 @@ async fn main() -> Result<()> {
                 let setup_tokens_clone = setup_tokens.clone();
                 let pending_raw_keys_clone = pending_raw_keys.clone();
                 let usage_store_clone = usage_store.clone();
+                let hive_clone = hive_instance.clone();
 
                 let chat_slots: Arc<Mutex<HashMap<String, ChatSlot>>> =
                     Arc::new(Mutex::new(HashMap::new()));
@@ -1835,6 +1903,7 @@ async fn main() -> Result<()> {
                             let setup_tokens_worker = setup_tokens_clone.clone();
                             let pending_raw_keys_worker = pending_raw_keys_clone.clone();
                             let usage_store_worker = usage_store_clone.clone();
+                            let hive_worker = hive_clone.clone();
                             let worker_chat_id = chat_id.clone();
 
                             tokio::spawn(async move {
@@ -2916,6 +2985,181 @@ Just type a message to chat with the AI agent.",
                                                                 parse_mode: None,
                                                             };
                                                             send_with_retry(&*sender, usage_msg).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Ok(Err(temm1e_core::types::error::Temm1eError::HiveRoute(hive_msg))) => {
+                                                // ── Classifier said Order+Complex, hive enabled → swarm ──
+                                                if let Some(ref hive) = hive_worker {
+                                                    if let Some(ref agent) = agent_state.read().await.as_ref().cloned() {
+                                                        let provider = agent.provider_arc();
+                                                        let model = agent.model().to_string();
+                                                        let hive = Arc::clone(hive);
+                                                        let chat_id = msg.chat_id.clone();
+
+                                                        tracing::info!(chat = %chat_id, "Hive: classifier routed Order+Complex to swarm");
+
+                                                        // Send immediate ack so the user knows swarm is working
+                                                        let ack = temm1e_core::types::message::OutboundMessage {
+                                                            chat_id: msg.chat_id.clone(),
+                                                            text: "Decomposing into parallel tasks...".to_string(),
+                                                            reply_to: Some(msg.id.clone()),
+                                                            parse_mode: None,
+                                                        };
+                                                        send_with_retry(&*sender, ack).await;
+
+                                                        let decompose_result = hive.maybe_decompose(
+                                                            &hive_msg, &chat_id,
+                                                            |prompt| {
+                                                                let p = provider.clone();
+                                                                let m = model.clone();
+                                                                async move {
+                                                                    let resp = p.complete(temm1e_core::types::message::CompletionRequest {
+                                                                        model: m,
+                                                                        messages: vec![temm1e_core::types::message::ChatMessage {
+                                                                            role: temm1e_core::types::message::Role::User,
+                                                                            content: temm1e_core::types::message::MessageContent::Text(prompt),
+                                                                        }],
+                                                                        tools: vec![],
+                                                                        max_tokens: None,
+                                                                        temperature: Some(0.3),
+                                                                        system: None,
+                                                                    }).await?;
+                                                                    let text: String = resp.content.iter().filter_map(|p| match p {
+                                                                        temm1e_core::types::message::ContentPart::Text { text } => Some(text.clone()),
+                                                                        _ => None,
+                                                                    }).collect();
+                                                                    let tokens = (resp.usage.input_tokens + resp.usage.output_tokens) as u64;
+                                                                    Ok((text, tokens))
+                                                                }
+                                                            },
+                                                        ).await;
+
+                                                        if let Ok(Some(order_id)) = decompose_result {
+                                                            tracing::info!(order_id = %order_id, "Hive: executing swarm order");
+                                                            let swarm_ack = temm1e_core::types::message::OutboundMessage {
+                                                                chat_id: msg.chat_id.clone(),
+                                                                text: format!("Swarm activated — workers processing in parallel..."),
+                                                                reply_to: None,
+                                                                parse_mode: None,
+                                                            };
+                                                            send_with_retry(&*sender, swarm_ack).await;
+                                                            let cancel = cancel_token_clone.clone();
+                                                            let provider = agent.provider_arc();
+                                                            let tools_h = tools_template.clone();
+                                                            let memory_h = memory.clone();
+                                                            let model_h = agent.model().to_string();
+
+                                                            let swarm_result = hive.execute_order(
+                                                                &order_id, cancel,
+                                                                move |task, deps| {
+                                                                    let p = provider.clone();
+                                                                    let t = tools_h.clone();
+                                                                    let m_clone = memory_h.clone();
+                                                                    let mdl = model_h.clone();
+                                                                    async move {
+                                                                        let scoped = temm1e_hive::worker::build_scoped_context(&task, &deps);
+                                                                        let mini = temm1e_agent::AgentRuntime::with_limits(
+                                                                            p, m_clone, t, mdl, None, 10, 30000, 50, 300, 0.0,
+                                                                        );
+                                                                        let mini_msg = temm1e_core::types::message::InboundMessage {
+                                                                            id: uuid::Uuid::new_v4().to_string(),
+                                                                            chat_id: "hive".into(), user_id: "hive".into(),
+                                                                            username: None, channel: "hive".into(),
+                                                                            text: Some(scoped), attachments: vec![],
+                                                                            reply_to: None, timestamp: chrono::Utc::now(),
+                                                                        };
+                                                                        let mut s = temm1e_core::types::session::SessionContext {
+                                                                            session_id: format!("hive-{}", task.id),
+                                                                            user_id: "hive".into(), channel: "hive".into(),
+                                                                            chat_id: "hive".into(), history: vec![],
+                                                                            workspace_path: std::path::PathBuf::from("."),
+                                                                        };
+                                                                        match mini.process_message(&mini_msg, &mut s, None, None, None, None, None).await {
+                                                                            Ok((r, u)) => Ok(temm1e_hive::worker::TaskResult {
+                                                                                summary: r.text, tokens_used: u.combined_tokens(),
+                                                                                artifacts: vec![], success: true, error: None,
+                                                                            }),
+                                                                            Err(e) => Ok(temm1e_hive::worker::TaskResult {
+                                                                                summary: String::new(), tokens_used: 0,
+                                                                                artifacts: vec![], success: false, error: Some(e.to_string()),
+                                                                            }),
+                                                                        }
+                                                                    }
+                                                                },
+                                                            ).await;
+
+                                                            match swarm_result {
+                                                                Ok(result) => {
+                                                                    let full_text = censor_secrets(&format!(
+                                                                        "{}\n\n---\nSwarm: {} tasks, {} workers, {}ms, {} tokens",
+                                                                        result.text, result.tasks_completed,
+                                                                        result.workers_used, result.wall_clock_ms,
+                                                                        result.total_tokens,
+                                                                    ));
+
+                                                                    // Split into chunks for Telegram's 4096 char limit
+                                                                    let max_chunk = 4000; // leave margin
+                                                                    let chunks: Vec<&str> = if full_text.len() <= max_chunk {
+                                                                        vec![&full_text]
+                                                                    } else {
+                                                                        // Split on double-newlines (task boundaries) or at max_chunk
+                                                                        let mut parts = Vec::new();
+                                                                        let mut remaining = full_text.as_str();
+                                                                        while !remaining.is_empty() {
+                                                                            if remaining.len() <= max_chunk {
+                                                                                parts.push(remaining);
+                                                                                break;
+                                                                            }
+                                                                            // Find a good split point (double newline near the limit)
+                                                                            let search_end = remaining.len().min(max_chunk);
+                                                                            let split_at = remaining[..search_end]
+                                                                                .rfind("\n\n")
+                                                                                .unwrap_or_else(|| {
+                                                                                    // Find safe char boundary near max_chunk
+                                                                                    remaining.char_indices()
+                                                                                        .take_while(|(i, _)| *i <= max_chunk)
+                                                                                        .last()
+                                                                                        .map(|(i, c)| i + c.len_utf8())
+                                                                                        .unwrap_or(max_chunk)
+                                                                                });
+                                                                            parts.push(&remaining[..split_at]);
+                                                                            remaining = remaining[split_at..].trim_start();
+                                                                        }
+                                                                        parts
+                                                                    };
+
+                                                                    for (i, chunk) in chunks.iter().enumerate() {
+                                                                        let reply = temm1e_core::types::message::OutboundMessage {
+                                                                            chat_id: msg.chat_id.clone(),
+                                                                            text: chunk.to_string(),
+                                                                            reply_to: if i == 0 { Some(msg.id.clone()) } else { None },
+                                                                            parse_mode: None,
+                                                                        };
+                                                                        send_with_retry(&*sender, reply).await;
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    tracing::error!(error = %e, "Hive execution failed");
+                                                                    let reply = temm1e_core::types::message::OutboundMessage {
+                                                                        chat_id: msg.chat_id.clone(),
+                                                                        text: format!("Swarm execution failed: {e}"),
+                                                                        reply_to: Some(msg.id.clone()),
+                                                                        parse_mode: None,
+                                                                    };
+                                                                    send_with_retry(&*sender, reply).await;
+                                                                }
+                                                            }
+                                                        } else {
+                                                            tracing::info!("Hive: decomposition failed or not worth it, no swarm");
+                                                            let reply = temm1e_core::types::message::OutboundMessage {
+                                                                chat_id: msg.chat_id.clone(),
+                                                                text: "Task classified as complex but decomposition wasn't viable. Please try rephrasing or breaking it down.".into(),
+                                                                reply_to: Some(msg.id.clone()),
+                                                                parse_mode: None,
+                                                            };
+                                                            send_with_retry(&*sender, reply).await;
                                                         }
                                                     }
                                                 }

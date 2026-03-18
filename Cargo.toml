@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["docs/swarm/experiment_artifacts"]
 members = [
     "crates/temm1e-core",
     "crates/temm1e-gateway",
@@ -17,6 +18,7 @@ members = [
     "crates/temm1e-mcp",
     "crates/temm1e-codex-oauth",
     "crates/temm1e-tui",
+    "crates/temm1e-hive",
 ]
 
 [workspace.package]
@@ -117,6 +119,7 @@ temm1e-test-utils = { path = "crates/temm1e-test-utils" }
 temm1e-mcp = { path = "crates/temm1e-mcp" }
 temm1e-codex-oauth = { path = "crates/temm1e-codex-oauth" }
 temm1e-tui = { path = "crates/temm1e-tui" }
+temm1e-hive = { path = "crates/temm1e-hive" }
 
 [package]
 name = "temm1e"
@@ -146,6 +149,7 @@ temm1e-filestore.workspace = true
 temm1e-mcp = { workspace = true, optional = true }
 temm1e-codex-oauth = { workspace = true, optional = true }
 temm1e-tui = { workspace = true, optional = true }
+temm1e-hive.workspace = true
 tokio.workspace = true
 clap.workspace = true
 dirs.workspace = true
