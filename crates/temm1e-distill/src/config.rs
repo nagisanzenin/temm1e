@@ -211,7 +211,7 @@ fn default_method() -> String {
     "qlora".to_string()
 }
 fn default_base_model() -> String {
-    "unsloth/Qwen2.5-7B-Instruct-bnb-4bit".to_string()
+    "auto".to_string()
 }
 fn default_epochs() -> i32 {
     3

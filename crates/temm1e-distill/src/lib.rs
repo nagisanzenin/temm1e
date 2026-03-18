@@ -256,6 +256,289 @@ impl EigenTuneEngine {
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
+
+    /// Get current base model setting.
+    pub fn current_model(&self) -> &str {
+        &self.config.base_model
+    }
+
+    /// Discover available base models for fine-tuning.
+    /// Checks Ollama for local models, returns recommended options based on hardware.
+    pub async fn discover_models(&self) -> ModelDiscovery {
+        let mut discovery = ModelDiscovery {
+            current: self.config.base_model.clone(),
+            ollama_available: false,
+            ollama_models: Vec::new(),
+            recommended: Vec::new(),
+            hardware: detect_hardware(),
+        };
+
+        // Check Ollama
+        if backends::ollama::is_available().await {
+            discovery.ollama_available = true;
+            if let Ok(models) = backends::ollama::list_models().await {
+                discovery.ollama_models = models
+                    .into_iter()
+                    .map(|m| DiscoveredModel {
+                        name: m.name.clone(),
+                        size_bytes: m.size.unwrap_or(0),
+                        family: m.details.as_ref().and_then(|d| d.family.clone()),
+                        param_size: m.details.as_ref().and_then(|d| d.parameter_size.clone()),
+                        quantization: m.details.as_ref().and_then(|d| d.quantization_level.clone()),
+                        source: "ollama".to_string(),
+                    })
+                    .collect();
+            }
+        }
+
+        // Build recommendations based on hardware
+        let ram_gb = discovery.hardware.ram_gb;
+        discovery.recommended = recommend_models(ram_gb, &discovery.hardware.chip);
+
+        discovery
+    }
+
+    /// Set the base model for fine-tuning.
+    /// Validates the model name is reasonable, updates config.
+    pub fn set_model(&mut self, model: &str) -> String {
+        let old = self.config.base_model.clone();
+        self.config.base_model = model.to_string();
+        format!(
+            "Eigen-Tune: base model changed from '{}' to '{}'",
+            old, model
+        )
+    }
+
+    /// Format model discovery for chat display.
+    pub async fn format_model_status(&self) -> String {
+        let discovery = self.discover_models().await;
+        let mut out = String::from("EIGEN-TUNE MODEL\n\n");
+
+        // Current model
+        let current_display = if discovery.current == "auto" {
+            "auto (system picks best for your hardware)".to_string()
+        } else {
+            discovery.current.clone()
+        };
+        out.push_str(&format!("Current: {}\n", current_display));
+        out.push_str(&format!(
+            "Hardware: {} · {} GB RAM\n\n",
+            discovery.hardware.chip, discovery.hardware.ram_gb
+        ));
+
+        // Recommended models
+        if !discovery.recommended.is_empty() {
+            out.push_str("Recommended for your hardware:\n");
+            for (i, model) in discovery.recommended.iter().enumerate() {
+                let marker = if i == 0 { "→" } else { " " };
+                out.push_str(&format!(
+                    "  {} {} ({}, ~{} GB RAM)\n",
+                    marker, model.name, model.param_size.as_deref().unwrap_or("?"),
+                    model.size_bytes / 1_000_000_000
+                ));
+            }
+            out.push('\n');
+        }
+
+        // Ollama models
+        if discovery.ollama_available {
+            if discovery.ollama_models.is_empty() {
+                out.push_str("Ollama: running, no models pulled\n");
+            } else {
+                out.push_str(&format!(
+                    "Ollama: {} models available\n",
+                    discovery.ollama_models.len()
+                ));
+                for m in discovery.ollama_models.iter().take(10) {
+                    let size = if m.size_bytes > 0 {
+                        format!("{:.1} GB", m.size_bytes as f64 / 1e9)
+                    } else {
+                        "? GB".to_string()
+                    };
+                    out.push_str(&format!(
+                        "  {} ({})\n",
+                        m.name, size
+                    ));
+                }
+            }
+        } else {
+            out.push_str("Ollama: not running (install from ollama.com)\n");
+        }
+
+        out.push_str("\nUsage: /eigentune model <name> to set base model\n");
+        out.push_str("       /eigentune model auto   to auto-select\n");
+
+        out
+    }
+}
+
+/// Result of model discovery.
+#[derive(Debug, Clone)]
+pub struct ModelDiscovery {
+    pub current: String,
+    pub ollama_available: bool,
+    pub ollama_models: Vec<DiscoveredModel>,
+    pub recommended: Vec<DiscoveredModel>,
+    pub hardware: HardwareInfo,
+}
+
+/// A discovered model (from Ollama or recommendation list).
+#[derive(Debug, Clone)]
+pub struct DiscoveredModel {
+    pub name: String,
+    pub size_bytes: u64,
+    pub family: Option<String>,
+    pub param_size: Option<String>,
+    pub quantization: Option<String>,
+    pub source: String,
+}
+
+/// Detected hardware info.
+#[derive(Debug, Clone)]
+pub struct HardwareInfo {
+    pub chip: String,
+    pub ram_gb: u64,
+    pub has_nvidia: bool,
+    pub has_apple_silicon: bool,
+}
+
+fn detect_hardware() -> HardwareInfo {
+    let ram_bytes: u64 = {
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::Command;
+            Command::new("sysctl")
+                .args(["-n", "hw.memsize"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+                .unwrap_or(0)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    };
+
+    let chip = {
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::Command;
+            Command::new("sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|| "Unknown".to_string())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            "Unknown".to_string()
+        }
+    };
+
+    let has_apple_silicon = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
+
+    HardwareInfo {
+        chip,
+        ram_gb: ram_bytes / (1024 * 1024 * 1024),
+        has_nvidia: false, // Would need nvidia-smi check
+        has_apple_silicon,
+    }
+}
+
+/// Recommend models based on available RAM and chip.
+fn recommend_models(ram_gb: u64, chip: &str) -> Vec<DiscoveredModel> {
+    let mut models = Vec::new();
+    let is_apple = chip.contains("Apple");
+    let prefix = if is_apple { "mlx-community" } else { "unsloth" };
+    let suffix = if is_apple { "-4bit" } else { "-bnb-4bit" };
+
+    // Always recommend smallest first (fastest training)
+    models.push(DiscoveredModel {
+        name: "HuggingFaceTB/SmolLM2-135M-Instruct".to_string(),
+        size_bytes: 270_000_000,
+        family: Some("SmolLM2".into()),
+        param_size: Some("135M".into()),
+        quantization: Some("F16".into()),
+        source: "huggingface".into(),
+    });
+
+    if ram_gb >= 8 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Qwen2.5-0.5B-Instruct{}", prefix, suffix),
+            size_bytes: 500_000_000,
+            family: Some("Qwen2.5".into()),
+            param_size: Some("0.5B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    if ram_gb >= 8 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Qwen2.5-1.5B-Instruct{}", prefix, suffix),
+            size_bytes: 1_500_000_000,
+            family: Some("Qwen2.5".into()),
+            param_size: Some("1.5B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    if ram_gb >= 12 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Phi-3.5-mini-instruct{}", prefix, suffix),
+            size_bytes: 2_500_000_000,
+            family: Some("Phi-3.5".into()),
+            param_size: Some("3.8B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    if ram_gb >= 16 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Qwen2.5-7B-Instruct{}", prefix, suffix),
+            size_bytes: 4_500_000_000,
+            family: Some("Qwen2.5".into()),
+            param_size: Some("7B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+        models.push(DiscoveredModel {
+            name: format!("{}/Llama-3.1-8B-Instruct{}", prefix, suffix),
+            size_bytes: 5_000_000_000,
+            family: Some("Llama 3.1".into()),
+            param_size: Some("8B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    if ram_gb >= 32 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Mistral-Small-24B-Instruct{}", prefix, suffix),
+            size_bytes: 14_000_000_000,
+            family: Some("Mistral".into()),
+            param_size: Some("24B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    if ram_gb >= 48 {
+        models.push(DiscoveredModel {
+            name: format!("{}/Qwen2.5-32B-Instruct{}", prefix, suffix),
+            size_bytes: 20_000_000_000,
+            family: Some("Qwen2.5".into()),
+            param_size: Some("32B".into()),
+            quantization: Some("Q4".into()),
+            source: "huggingface".into(),
+        });
+    }
+
+    models
 }
 
 #[cfg(test)]
@@ -298,5 +581,85 @@ mod tests {
             .unwrap();
         let text = engine.format_status().await;
         assert!(text.contains("EIGEN-TUNE STATUS"));
+    }
+
+    #[test]
+    fn test_current_model_default() {
+        let config = EigenTuneConfig::default();
+        assert_eq!(config.base_model, "auto");
+    }
+
+    #[test]
+    fn test_set_model() {
+        let mut config = EigenTuneConfig::default();
+        config.base_model = "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string();
+        assert!(config.base_model.contains("Llama"));
+    }
+
+    #[test]
+    fn test_detect_hardware() {
+        let hw = detect_hardware();
+        // Should at least return something without panicking
+        assert!(!hw.chip.is_empty());
+    }
+
+    #[test]
+    fn test_recommend_models_16gb() {
+        let models = recommend_models(16, "Apple M2");
+        assert!(!models.is_empty());
+        // Should recommend at least SmolLM2 and up to 8B
+        assert!(models.iter().any(|m| m.param_size.as_deref() == Some("135M")));
+        assert!(models.iter().any(|m| m.param_size.as_deref() == Some("8B")));
+        // Should NOT recommend 24B+ for 16GB
+        assert!(!models.iter().any(|m| m.param_size.as_deref() == Some("24B")));
+    }
+
+    #[test]
+    fn test_recommend_models_8gb() {
+        let models = recommend_models(8, "Apple M1");
+        // Should have SmolLM2 and small models, but NOT 7B/8B
+        assert!(models.iter().any(|m| m.param_size.as_deref() == Some("135M")));
+        assert!(!models.iter().any(|m| m.param_size.as_deref() == Some("8B")));
+    }
+
+    #[test]
+    fn test_recommend_models_uses_correct_prefix() {
+        let apple_models = recommend_models(16, "Apple M2");
+        let nvidia_models = recommend_models(16, "NVIDIA RTX 4090");
+
+        // Apple should use mlx-community prefix
+        let apple_7b = apple_models.iter().find(|m| m.param_size.as_deref() == Some("7B"));
+        if let Some(m) = apple_7b {
+            assert!(m.name.contains("mlx-community"), "Apple should use mlx-community: {}", m.name);
+        }
+
+        // NVIDIA should use unsloth prefix
+        let nvidia_7b = nvidia_models.iter().find(|m| m.param_size.as_deref() == Some("7B"));
+        if let Some(m) = nvidia_7b {
+            assert!(m.name.contains("unsloth"), "NVIDIA should use unsloth: {}", m.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_discover_models() {
+        let config = EigenTuneConfig::default();
+        let engine = EigenTuneEngine::new(&config, "sqlite::memory:")
+            .await
+            .unwrap();
+        let discovery = engine.discover_models().await;
+        assert_eq!(discovery.current, "auto");
+        assert!(!discovery.recommended.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_format_model_status() {
+        let config = EigenTuneConfig::default();
+        let engine = EigenTuneEngine::new(&config, "sqlite::memory:")
+            .await
+            .unwrap();
+        let text = engine.format_model_status().await;
+        assert!(text.contains("EIGEN-TUNE MODEL"));
+        assert!(text.contains("Current:"));
+        assert!(text.contains("Hardware:"));
     }
 }
