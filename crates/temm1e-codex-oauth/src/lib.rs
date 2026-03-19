@@ -415,6 +415,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore = "Launches browser on macOS/Linux CI runners — run manually with --ignored"]
     fn open_browser_handles_complex_urls() {
         let complex_url = "https://auth.openai.com/oauth/authorize?client_id=test&redirect_uri=http://localhost:1455/callback&response_type=code&scope=openid+profile+email&state=abc123&code_challenge=xyz&code_challenge_method=S256";
         

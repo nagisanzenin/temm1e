@@ -1569,4 +1569,88 @@ mod tests {
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0], "a.txt");
     }
+
+    // ── Tilde expansion tests ───────────────────────────────────────
+
+    #[test]
+    fn tilde_expansion_home_with_path() {
+        // ~/foo should expand to home_dir/foo
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+
+        let tool = MockTool::new("tilde_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("~/foo".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // This should NOT error — tilde paths are allowed for system-level access
+        let result = validate_sandbox(&tool, &session);
+        // Tilde paths outside workspace are allowed for ~/.skyclaw/* paths
+        // but ~/foo is not in workspace, so it should error unless it's ~/.skyclaw/*
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tilde_expansion_home_alone() {
+        // ~ alone should expand to home directory
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+
+        let tool = MockTool::new("tilde_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("~".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // ~ alone is outside workspace, should error
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tilde_expansion_non_tilde_paths_unchanged() {
+        // Non-tilde paths should not be modified
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        let inner_dir = workspace.join("data");
+        std::fs::create_dir_all(&inner_dir).unwrap();
+
+        let tool = MockTool::new("normal_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("data".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // Regular relative path should work fine
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_ok());
+    }
 }

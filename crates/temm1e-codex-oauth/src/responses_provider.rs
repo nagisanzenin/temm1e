@@ -35,6 +35,7 @@ impl CodexResponsesProvider {
             base_url: "https://chatgpt.com/backend-api/codex".to_string(),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
                 .build()
                 .unwrap_or_default(),
         }
@@ -265,6 +266,7 @@ impl Provider for CodexResponsesProvider {
         let body = self.build_request_body(&request, true)?;
 
         tracing::debug!(model = %request.model, account_id = %account_id, "Codex Responses API request (streaming)");
+        tracing::info!(url = %format!("{}/responses", self.base_url), "Attempting Codex API connection");
 
         let resp = self
             .client
@@ -273,10 +275,16 @@ impl Provider for CodexResponsesProvider {
             .header("chatgpt-account-id", account_id)
             .header("OpenAI-Beta", "responses=experimental")
             .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("Origin", "https://chatgpt.com")
+            .header("Referer", "https://chatgpt.com/")
             .json(&body)
             .send()
             .await
-            .map_err(|e| Temm1eError::Provider(format!("Responses API request failed: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, url = %format!("{}/responses", self.base_url), "Responses API request failed - Connection error. This may indicate: 1) OpenAI Codex API is unavailable, 2) Network/firewall blocking the connection, 3) OAuth token expired or invalid");
+                Temm1eError::Provider(format!("Responses API request failed: {}. Try: 1) Check your internet connection, 2) Verify firewall/antivirus settings, 3) Re-authenticate with 'temm1e auth login'", e))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

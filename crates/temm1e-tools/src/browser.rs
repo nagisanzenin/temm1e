@@ -270,19 +270,29 @@ impl BrowserTool {
         // ── Stealth launch flags ─────────────────────────────────────
         let mut config_builder = BrowserConfig::builder();
         
-        // Try to find Chrome executable on Windows
-        #[cfg(target_os = "windows")]
-        {
-            let chrome_paths = [
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            ];
-            
-            for path in &chrome_paths {
-                if std::path::Path::new(path).exists() {
-                    config_builder = config_builder.chrome_executable(path);
-                    tracing::debug!("Found Chrome at: {}", path);
-                    break;
+        // Try to find Chrome executable — check CHROME_PATH env var first
+        if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+            if std::path::Path::new(&chrome_path).exists() {
+                config_builder = config_builder.chrome_executable(&chrome_path);
+                tracing::debug!("Using Chrome from CHROME_PATH: {}", chrome_path);
+            } else {
+                tracing::warn!("CHROME_PATH set but file not found: {}", chrome_path);
+            }
+        } else {
+            // Fallback to standard paths on Windows
+            #[cfg(target_os = "windows")]
+            {
+                let chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                ];
+                
+                for path in &chrome_paths {
+                    if std::path::Path::new(path).exists() {
+                        config_builder = config_builder.chrome_executable(path);
+                        tracing::debug!("Found Chrome at: {}", path);
+                        break;
+                    }
                 }
             }
         }

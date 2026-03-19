@@ -172,6 +172,11 @@ mod tests {
     fn find_port_cross_platform() {
         // Should work on all OS since it's just TCP binding
         let port1 = find_available_port().unwrap();
+        
+        // Bind the first port to guarantee it's taken
+        let _listener1 = std::net::TcpListener::bind(format!("127.0.0.1:{}", port1)).unwrap();
+        
+        // Now find a second port — should be different since first is bound
         let port2 = find_available_port().unwrap();
         
         // Should find different ports
@@ -181,11 +186,8 @@ mod tests {
         assert!(port1 >= 1455 && port1 < 1555);
         assert!(port2 >= 1455 && port2 < 1555);
         
-        // Should actually be bindable on all OS
-        let listener1 = std::net::TcpListener::bind(format!("127.0.0.1:{}", port1));
+        // Second port should be bindable
         let listener2 = std::net::TcpListener::bind(format!("127.0.0.1:{}", port2));
-        
-        assert!(listener1.is_ok());
         assert!(listener2.is_ok());
     }
 

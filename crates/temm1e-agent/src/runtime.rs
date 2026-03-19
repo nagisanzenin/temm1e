@@ -1057,10 +1057,10 @@ impl AgentRuntime {
                 }
                 let mut reply_text = text_parts.join("\n");
                 
-                // Fallback: if reply_text is empty, provide a default message
+                // Fallback: if reply_text is empty, warn about upstream issue
                 if reply_text.trim().is_empty() {
                     reply_text = "Task completed.".to_string();
-                    debug!("Empty reply text detected, using fallback message");
+                    warn!("Empty reply text detected (no text parts from model) — using fallback message. This may indicate an upstream provider issue.");
                 }
 
                 // If send_message was used during this turn, the user already
