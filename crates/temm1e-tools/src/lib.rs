@@ -63,6 +63,9 @@ pub fn create_tools(
     shared_mode: Option<SharedMode>,
     vault: Option<Arc<dyn Vault>>,
 ) -> Vec<Arc<dyn Tool>> {
+    // vault is only used when browser feature is enabled
+    let _ = &vault;
+
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
     if config.shell {

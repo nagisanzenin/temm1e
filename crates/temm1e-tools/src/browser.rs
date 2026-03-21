@@ -838,9 +838,7 @@ impl BrowserTool {
             }
         }
 
-        builder = builder
-            .user_data_dir(&work_profile)
-            .arg("--no-first-run");
+        builder = builder.user_data_dir(&work_profile).arg("--no-first-run");
 
         // TEMM1E_NO_STEALTH=1 disables all anti-detection flags (for sites
         // like Zalo that detect stealth flags themselves and show blank pages)
@@ -1084,13 +1082,6 @@ impl BrowserTool {
             safe_name, cookie_count
         ))
     }
-}
-
-/// Public wrapper around `format_ax_tree` for use by `browser_session` module.
-pub fn format_ax_tree_pub(
-    nodes: &[chromiumoxide::cdp::browser_protocol::accessibility::AxNode],
-) -> String {
-    format_ax_tree(nodes)
 }
 
 /// Return the sessions directory path: `~/.temm1e/sessions/`.

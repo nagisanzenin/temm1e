@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 
 use chromiumoxide::browser::Browser;
 // CDP Accessibility API removed — using JS-based extraction instead (chromiumoxide 0.7 compat)
-use chromiumoxide::cdp::browser_protocol::dom::{BackendNodeId, GetBoxModelParams};
+use chromiumoxide::cdp::browser_protocol::dom::BackendNodeId;
 use chromiumoxide::cdp::browser_protocol::dom_storage::{GetDomStorageItemsParams, StorageId};
 use chromiumoxide::cdp::browser_protocol::network::{
     CookieParam, CookieSameSite, GetCookiesParams, SetCookiesParams, TimeSinceEpoch,
@@ -41,6 +41,7 @@ use zeroize::Zeroizing;
 // ── Constants ────────────────────────────────────────────────────────
 
 /// Roles considered interactive for the numbered overlay annotation.
+#[cfg(test)]
 const SESSION_INTERACTIVE_ROLES: &[&str] = &[
     "button",
     "link",
@@ -201,9 +202,7 @@ impl InteractiveBrowseSession {
             .join("temm1e")
             .join("browser-profile");
         if work_profile.exists() {
-            builder = builder
-                .user_data_dir(&work_profile)
-                .arg("--no-first-run");
+            builder = builder.user_data_dir(&work_profile).arg("--no-first-run");
         }
 
         if std::env::var("TEMM1E_CLEAN_BROWSER").unwrap_or_default() == "1" {
@@ -343,7 +342,7 @@ impl InteractiveBrowseSession {
             w: i32,
             h: i32,
             #[serde(default)]
-            primary: bool,
+            _primary: bool,
         }
 
         let elements: Vec<JsElement> = serde_json::from_str(&json_str).unwrap_or_default();
@@ -745,40 +744,6 @@ impl InteractiveBrowseSession {
                 Vec::new()
             }
         }
-    }
-
-    /// Click a backend DOM node via CDP (resolve to JS object, call `.click()`).
-    async fn cdp_click_backend_node(
-        &self,
-        backend_node_id: BackendNodeId,
-    ) -> Result<(), Temm1eError> {
-        use chromiumoxide::cdp::browser_protocol::dom::ResolveNodeParams;
-        use chromiumoxide::cdp::js_protocol::runtime::CallFunctionOnParams;
-
-        let resolved = self
-            .page
-            .execute(
-                ResolveNodeParams::builder()
-                    .backend_node_id(backend_node_id)
-                    .build(),
-            )
-            .await
-            .map_err(|e| Temm1eError::Tool(format!("Session: resolve node failed: {}", e)))?;
-
-        let object_id =
-            resolved.result.object.object_id.ok_or_else(|| {
-                Temm1eError::Tool("Session: resolved node has no object ID".into())
-            })?;
-
-        let mut call_params = CallFunctionOnParams::new("function() { this.click(); }");
-        call_params.object_id = Some(object_id);
-
-        self.page
-            .execute(call_params)
-            .await
-            .map_err(|e| Temm1eError::Tool(format!("Session: click failed: {}", e)))?;
-
-        Ok(())
     }
 }
 

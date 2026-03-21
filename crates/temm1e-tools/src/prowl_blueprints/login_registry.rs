@@ -235,7 +235,10 @@ mod tests {
             Some("https://www.facebook.com/login")
         );
         assert_eq!(lookup_login_url("github"), Some("https://github.com/login"));
-        assert_eq!(lookup_login_url("FACEBOOK"), None); // case-sensitive lookup, resolve handles lowercase
+        assert_eq!(
+            lookup_login_url("FACEBOOK"),
+            Some("https://www.facebook.com/login")
+        ); // lookup is case-insensitive (to_lowercase before map lookup)
     }
 
     #[test]

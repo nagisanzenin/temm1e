@@ -3527,14 +3527,35 @@ Just type a message to chat with the AI agent.",
                                                                 }
                                                             }
                                                         } else {
-                                                            tracing::info!("Alpha: decomposition failed or not worth it, no pack");
-                                                            let reply = temm1e_core::types::message::OutboundMessage {
-                                                                chat_id: msg.chat_id.clone(),
-                                                                text: "Task classified as complex but decomposition wasn't viable. Please try rephrasing or breaking it down.".into(),
-                                                                reply_to: Some(msg.id.clone()),
-                                                                parse_mode: None,
-                                                            };
-                                                            send_with_retry(&*sender, reply).await;
+                                                            // Decomposition wasn't viable — fall back to single-agent processing
+                                                            tracing::info!("Alpha: decomposition failed or not worth it, falling back to single-agent");
+                                                            let fallback_agent = Arc::new(temm1e_agent::AgentRuntime::with_limits(
+                                                                agent.provider_arc(),
+                                                                memory.clone(),
+                                                                tools_template.clone(),
+                                                                agent.model().to_string(),
+                                                                Some(build_system_prompt()),
+                                                                max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
+                                                            let fallback_cancel = cancel_token_clone.clone();
+                                                            match fallback_agent.process_message(&msg, &mut session, Some(interrupt_clone.clone()), Some(pending_for_worker.clone()), None, None, Some(fallback_cancel)).await {
+                                                                Ok((mut reply, _usage)) => {
+                                                                    reply.text = censor_secrets(&reply.text);
+                                                                    if !reply.text.trim().is_empty() {
+                                                                        send_with_retry(&*sender, reply).await;
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    tracing::error!(error = %e, "Single-agent fallback failed");
+                                                                    let reply = temm1e_core::types::message::OutboundMessage {
+                                                                        chat_id: msg.chat_id.clone(),
+                                                                        text: censor_secrets(&format_user_error(&e)),
+                                                                        reply_to: Some(msg.id.clone()),
+                                                                        parse_mode: None,
+                                                                    };
+                                                                    send_with_retry(&*sender, reply).await;
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
