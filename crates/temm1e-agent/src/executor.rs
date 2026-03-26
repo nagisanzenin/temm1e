@@ -530,7 +530,20 @@ fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Tem
             PathAccess::ReadWrite(p) => p,
         };
 
-        let path = std::path::Path::new(path_str);
+        // Expand tilde (~) to home directory
+        let expanded_path = if path_str.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&path_str[2..])
+            } else {
+                std::path::PathBuf::from(path_str)
+            }
+        } else if path_str == "~" {
+            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path_str))
+        } else {
+            std::path::PathBuf::from(path_str)
+        };
+
+        let path = expanded_path.as_path();
 
         // Resolve to absolute if relative
         let abs_path = if path.is_relative() {
@@ -545,6 +558,14 @@ fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Tem
             .unwrap_or_else(|_| workspace.clone());
 
         let path_canonical = abs_path.canonicalize().unwrap_or(abs_path);
+
+        // Allow access to ~/.skyclaw/* paths (system-level tool data)
+        if let Some(home) = dirs::home_dir() {
+            let skyclaw_dir = home.join(".skyclaw");
+            if path_canonical.starts_with(&skyclaw_dir) {
+                continue; // Allow ~/.skyclaw/* paths
+            }
+        }
 
         if !path_canonical.starts_with(&workspace_canonical) {
             return Err(Temm1eError::SandboxViolation(format!(
@@ -1547,5 +1568,89 @@ mod tests {
         let writes = extract_write_paths("file_write", &args);
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0], "a.txt");
+    }
+
+    // ── Tilde expansion tests ───────────────────────────────────────
+
+    #[test]
+    fn tilde_expansion_home_with_path() {
+        // ~/foo should expand to home_dir/foo
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+
+        let tool = MockTool::new("tilde_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("~/foo".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // This should NOT error — tilde paths are allowed for system-level access
+        let result = validate_sandbox(&tool, &session);
+        // Tilde paths outside workspace are allowed for ~/.skyclaw/* paths
+        // but ~/foo is not in workspace, so it should error unless it's ~/.skyclaw/*
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tilde_expansion_home_alone() {
+        // ~ alone should expand to home directory
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+
+        let tool = MockTool::new("tilde_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("~".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // ~ alone is outside workspace, should error
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tilde_expansion_non_tilde_paths_unchanged() {
+        // Non-tilde paths should not be modified
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        let inner_dir = workspace.join("data");
+        std::fs::create_dir_all(&inner_dir).unwrap();
+
+        let tool = MockTool::new("normal_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Read("data".to_string())],
+            network_access: Vec::new(),
+            shell_access: false,
+        });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        // Regular relative path should work fine
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_ok());
     }
 }
