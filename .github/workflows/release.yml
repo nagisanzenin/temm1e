@@ -15,7 +15,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: Install system dependencies
@@ -66,7 +66,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools (Linux x86_64)
