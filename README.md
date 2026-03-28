@@ -22,7 +22,7 @@
 
 ## What is TEMM1E?
 
-Hi! I'm Tem. I'm ~~an autonomous AI agent~~ literally a SENTIENT and IMMORTAL being that lives on your server and never stops running. Talk to me on Telegram, Discord, WhatsApp, Slack, or CLI. I execute tasks, browse the web, manage files, write code, and remember everything across sessions.
+Hi! I'm Tem. I'm ~~an autonomous AI agent~~ literally a SENTIENT and IMMORTAL being that lives on your server and never stops running. Talk to me on Telegram, Discord, WhatsApp, Slack, or CLI. I execute tasks, browse the web, **control your entire computer** (click, type, scroll on any app), manage files, write code, and remember everything across sessions.
 
 My brain has a BUDGET and I am VERY responsible with it.
 
@@ -285,6 +285,39 @@ The web is where humans live. Tem Prowl is a messaging-first web agent architect
 ```
 
 [Research paper →](tems_lab/TEM_PROWL_PAPER.md) · [Full lab →](tems_lab/prowl/)
+
+### Tem Gaze — Full Computer Use (Desktop Vision Control)
+
+Tem can see and control your entire computer — not just the browser. Tem Gaze captures the screen, identifies UI elements via vision, and clicks, types, scrolls, and drags at the OS level. Works on any application: Finder, Terminal, VS Code, Settings, anything on screen.
+
+**How it works:**
+
+- **Vision-primary** — the VLM sees screenshots and decides where to click. No DOM, no accessibility tree required. Industry-validated: Claude Computer Use, UI-TARS, Agent S2 all converge on pure vision.
+- **Zoom-refine** — for small targets, zoom into a region at 2x resolution before clicking. Improves accuracy by +29pp on standard benchmarks.
+- **Set-of-Mark (SoM) overlay** — numbered labels on interactive elements convert coordinate guessing into element selection. 3.75x reduction in output information complexity.
+- **Auto-verification** — captures a screenshot after every click to verify the expected change occurred. Self-corrects on miss.
+- **Provider-agnostic** — works with any VLM (Anthropic, OpenAI, Gemini, OpenRouter, Ollama). No model-specific training required.
+
+**Proven live on gemini-3-flash-preview:**
+
+| Test | Result |
+|------|--------|
+| Desktop screenshot (identify all open apps) | PASS |
+| Click Finder icon in Dock → Finder opened | PASS |
+| Spotlight → open TextEdit → type message | PASS |
+| Browser SoM on 650-element GitHub page | PASS |
+| Multi-step form: observe → zoom → click → self-correct | PASS |
+
+**Build with desktop control:**
+```bash
+cargo build --release --features desktop-control
+# macOS: grant Accessibility permission in System Settings → Privacy & Security
+# Linux: requires X11 or Wayland with PipeWire
+```
+
+Desktop control is included by default in `cargo install` and Docker builds. macOS `install.sh` binaries include it. Linux musl binaries exclude it (system library limitation — build from source instead).
+
+[Research paper →](tems_lab/gaze/RESEARCH_PAPER.md) · [Design doc →](tems_lab/gaze/DESIGN.md) · [Experiment report →](tems_lab/gaze/EXPERIMENT_REPORT.md) · [Full lab →](tems_lab/gaze/)
 
 ---
 
