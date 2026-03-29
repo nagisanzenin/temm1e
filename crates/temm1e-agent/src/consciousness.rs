@@ -1,4 +1,4 @@
-//! Tem Aware — consciousness observation types and data collection.
+//! Tem Conscious — consciousness observation types and data collection.
 //!
 //! Defines the `TurnObservation` struct that captures the agent's internal
 //! state after each turn, and the `ConsciousnessIntervention` enum that
@@ -85,9 +85,9 @@ pub enum ConsciousnessIntervention {
     },
 }
 
-/// Configuration for the awareness (consciousness) system.
+/// Configuration for the consciousness (consciousness) system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AwarenessConfig {
+pub struct ConsciousnessConfig {
     /// Enable consciousness observation. Off by default.
     #[serde(default)]
     pub enabled: bool,
@@ -102,7 +102,7 @@ pub struct AwarenessConfig {
     pub observation_mode: String,
 }
 
-impl Default for AwarenessConfig {
+impl Default for ConsciousnessConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -141,8 +141,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_awareness_config_defaults() {
-        let config = AwarenessConfig::default();
+    fn test_consciousness_config_defaults() {
+        let config = ConsciousnessConfig::default();
         assert!(!config.enabled);
         assert!((config.confidence_threshold - 0.7).abs() < f64::EPSILON);
         assert_eq!(config.max_interventions_per_session, 10);

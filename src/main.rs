@@ -1907,18 +1907,18 @@ async fn main() -> Result<()> {
                     .with_hive_enabled(hive_enabled_early)
                     .with_shared_mode(shared_mode.clone())
                     .with_shared_memory_strategy(shared_memory_strategy.clone());
-                    // Tem Aware: enable consciousness if configured
-                    if config.awareness.enabled {
-                        let aware_config = temm1e_agent::awareness::AwarenessConfig {
+                    // Tem Conscious: enable consciousness if configured
+                    if config.consciousness.enabled {
+                        let aware_config = temm1e_agent::consciousness::ConsciousnessConfig {
                             enabled: true,
-                            confidence_threshold: config.awareness.confidence_threshold,
+                            confidence_threshold: config.consciousness.confidence_threshold,
                             max_interventions_per_session: config
-                                .awareness
+                                .consciousness
                                 .max_interventions_per_session,
-                            observation_mode: config.awareness.observation_mode.clone(),
+                            observation_mode: config.consciousness.observation_mode.clone(),
                         };
-                        runtime = runtime.with_awareness(
-                            temm1e_agent::awareness_engine::AwarenessEngine::new(
+                        runtime = runtime.with_consciousness(
+                            temm1e_agent::consciousness_engine::ConsciousnessEngine::new(
                                 aware_config,
                                 provider.clone(),
                                 model.clone(),
@@ -4702,7 +4702,7 @@ Just type a message to chat with the AI agent.",
                     match provider_result {
                         Ok(provider) => {
                             let system_prompt = Some(build_system_prompt());
-                            let awareness_provider = provider.clone();
+                            let consciousness_provider = provider.clone();
                             let mut rt = temm1e_agent::AgentRuntime::with_limits(
                                 provider,
                                 memory.clone(),
@@ -4720,24 +4720,30 @@ Just type a message to chat with the AI agent.",
                             .with_hive_enabled(hive_enabled_early)
                             .with_shared_mode(shared_mode.clone())
                             .with_shared_memory_strategy(shared_memory_strategy.clone());
-                            // Tem Aware: enable consciousness for CLI chat
+                            // Tem Conscious: enable consciousness for CLI chat
                             tracing::info!(
-                                awareness_enabled = config.awareness.enabled,
-                                "Checking awareness config"
+                                consciousness_enabled = config.consciousness.enabled,
+                                "Checking consciousness config"
                             );
-                            if config.awareness.enabled {
-                                let aware_cfg = temm1e_agent::awareness::AwarenessConfig {
-                                    enabled: true,
-                                    confidence_threshold: config.awareness.confidence_threshold,
-                                    max_interventions_per_session: config
-                                        .awareness
-                                        .max_interventions_per_session,
-                                    observation_mode: config.awareness.observation_mode.clone(),
-                                };
-                                rt = rt.with_awareness(
-                                    temm1e_agent::awareness_engine::AwarenessEngine::new(
-                                        aware_cfg,
-                                        awareness_provider.clone(),
+                            if config.consciousness.enabled {
+                                let consciousness_cfg =
+                                    temm1e_agent::consciousness::ConsciousnessConfig {
+                                        enabled: true,
+                                        confidence_threshold: config
+                                            .consciousness
+                                            .confidence_threshold,
+                                        max_interventions_per_session: config
+                                            .consciousness
+                                            .max_interventions_per_session,
+                                        observation_mode: config
+                                            .consciousness
+                                            .observation_mode
+                                            .clone(),
+                                    };
+                                rt = rt.with_consciousness(
+                                    temm1e_agent::consciousness_engine::ConsciousnessEngine::new(
+                                        consciousness_cfg,
+                                        consciousness_provider.clone(),
                                         model.clone(),
                                     ),
                                 );

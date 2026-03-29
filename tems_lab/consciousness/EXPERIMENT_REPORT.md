@@ -1,4 +1,4 @@
-# Tem Aware — Final Experiment Report (LLM-Powered Consciousness)
+# Tem Conscious — Final Experiment Report (LLM-Powered Consciousness)
 
 > **Date:** 2026-03-29
 > **Provider:** Gemini (gemini-3-flash-preview)

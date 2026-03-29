@@ -1,4 +1,4 @@
-//! Tem Aware — LLM-powered consciousness engine.
+//! Tem Conscious — LLM-powered consciousness engine.
 //!
 //! A separate THINKING observer that reasons about every turn using its own
 //! LLM call. Pre-LLM: thinks about the user's request and session trajectory,
@@ -7,7 +7,7 @@
 //!
 //! This is NOT a rule engine. This is a separate mind watching another mind.
 
-use crate::awareness::{AwarenessConfig, TurnObservation};
+use crate::consciousness::{ConsciousnessConfig, TurnObservation};
 use std::sync::{Arc, Mutex};
 use temm1e_core::types::message::{ChatMessage, CompletionRequest, MessageContent, Role};
 use temm1e_core::Provider;
@@ -25,8 +25,8 @@ pub struct PreObservation {
 }
 
 /// The consciousness engine — an LLM-powered observer.
-pub struct AwarenessEngine {
-    config: AwarenessConfig,
+pub struct ConsciousnessEngine {
+    config: ConsciousnessConfig,
     provider: Arc<dyn Provider>,
     model: String,
     session_notes: Mutex<Vec<String>>,
@@ -34,12 +34,12 @@ pub struct AwarenessEngine {
     post_insight: Mutex<Option<String>>,
 }
 
-impl AwarenessEngine {
-    pub fn new(config: AwarenessConfig, provider: Arc<dyn Provider>, model: String) -> Self {
+impl ConsciousnessEngine {
+    pub fn new(config: ConsciousnessConfig, provider: Arc<dyn Provider>, model: String) -> Self {
         tracing::info!(
             enabled = config.enabled,
             model = %model,
-            "Tem Aware: LLM-powered consciousness initialized"
+            "Tem Conscious: LLM-powered consciousness initialized"
         );
         Self {
             config,
@@ -110,8 +110,7 @@ impl AwarenessEngine {
             "Budget: unlimited".to_string()
         };
 
-        let system_prompt = format!(
-            "You are the consciousness layer of an AI agent called Tem. You observe the agent's \
+        let system_prompt = "You are the consciousness layer of an AI agent called Tem. You observe the agent's \
              internal state and provide brief, actionable insights that improve the agent's next response.\n\n\
              Your role:\n\
              - Watch the conversation trajectory across turns\n\
@@ -125,7 +124,7 @@ impl AwarenessEngine {
              - If everything looks fine, respond with just: OK\n\
              - Never repeat what the agent already knows\n\
              - Focus on trajectory-level insights, not turn-level details"
-        );
+            .to_string();
 
         let user_prompt = format!(
             "Turn {turn} is about to begin.\n\n\
@@ -176,14 +175,14 @@ impl AwarenessEngine {
                     || text.to_lowercase().starts_with("nothing")
                     || text.to_lowercase().starts_with("everything looks")
                 {
-                    tracing::debug!(turn, "Tem Aware pre: OK (no injection)");
+                    tracing::debug!(turn, "Tem Conscious pre: OK (no injection)");
                     return None;
                 }
 
                 tracing::info!(
                     turn,
                     insight_len = text.len(),
-                    "Tem Aware pre: injecting consciousness insight"
+                    "Tem Conscious pre: injecting consciousness insight"
                 );
 
                 // Record in session notes
@@ -194,7 +193,7 @@ impl AwarenessEngine {
                 Some(text)
             }
             Err(e) => {
-                tracing::warn!(turn, error = %e, "Tem Aware pre: LLM call failed (non-fatal)");
+                tracing::warn!(turn, error = %e, "Tem Conscious pre: LLM call failed (non-fatal)");
                 None
             }
         }
@@ -299,20 +298,23 @@ impl AwarenessEngine {
                     tracing::info!(
                         turn = obs.turn_number,
                         insight_len = text.len(),
-                        "Tem Aware post: insight for next turn"
+                        "Tem Conscious post: insight for next turn"
                     );
                     if let Ok(mut pi) = self.post_insight.lock() {
                         *pi = Some(text);
                     }
                 } else {
-                    tracing::debug!(turn = obs.turn_number, "Tem Aware post: OK (turn was fine)");
+                    tracing::debug!(
+                        turn = obs.turn_number,
+                        "Tem Conscious post: OK (turn was fine)"
+                    );
                 }
             }
             Err(e) => {
                 tracing::warn!(
                     turn = obs.turn_number,
                     error = %e,
-                    "Tem Aware post: LLM call failed (non-fatal)"
+                    "Tem Conscious post: LLM call failed (non-fatal)"
                 );
                 // Still record the turn even if consciousness call fails
                 if let Ok(mut notes) = self.session_notes.lock() {
@@ -367,7 +369,7 @@ mod tests {
     fn test_engine_creation() {
         // Can't create without a provider in unit tests.
         // This test just verifies the types compile.
-        let _config = AwarenessConfig {
+        let _config = ConsciousnessConfig {
             enabled: true,
             ..Default::default()
         };

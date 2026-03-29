@@ -2,11 +2,11 @@
 //! through AI providers with tool execution support.
 
 pub mod agent_task_status;
-pub mod awareness;
-pub mod awareness_engine;
 pub mod blueprint;
 pub mod budget;
 pub mod circuit_breaker;
+pub mod consciousness;
+pub mod consciousness_engine;
 pub mod context;
 pub mod delegation;
 pub mod done_criteria;

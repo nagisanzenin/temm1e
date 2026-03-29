@@ -92,9 +92,9 @@ pub struct AgentRuntime {
     shared_mode: Option<SharedMode>,
     /// Shared memory strategy (Lambda or Echo). Updated at runtime by /memory command.
     shared_memory_strategy: Option<Arc<RwLock<temm1e_core::types::config::MemoryStrategy>>>,
-    /// Tem Aware — consciousness observer that watches internal state and
+    /// Tem Conscious — consciousness observer that watches internal state and
     /// selectively injects context to improve outcomes. None = disabled.
-    awareness: Option<crate::awareness_engine::AwarenessEngine>,
+    consciousness: Option<crate::consciousness_engine::ConsciousnessEngine>,
 }
 
 impl AgentRuntime {
@@ -128,7 +128,7 @@ impl AgentRuntime {
             parallel_phases: false,
             shared_mode: None,
             shared_memory_strategy: None,
-            awareness: None,
+            consciousness: None,
         }
     }
 
@@ -196,7 +196,7 @@ impl AgentRuntime {
             parallel_phases: false,
             shared_mode: None,
             shared_memory_strategy: None,
-            awareness: None,
+            consciousness: None,
         }
     }
 
@@ -222,9 +222,12 @@ impl AgentRuntime {
         self
     }
 
-    /// Enable Tem Aware consciousness observer.
-    pub fn with_awareness(mut self, engine: crate::awareness_engine::AwarenessEngine) -> Self {
-        self.awareness = Some(engine);
+    /// Enable Tem Conscious consciousness observer.
+    pub fn with_consciousness(
+        mut self,
+        engine: crate::consciousness_engine::ConsciousnessEngine,
+    ) -> Self {
+        self.consciousness = Some(engine);
         self
     }
 
@@ -311,7 +314,7 @@ impl AgentRuntime {
         let mut turn_tools_used: u32 = 0;
         let mut turn_cost_usd: f64 = 0.0;
 
-        // Tem Aware: observation accumulators (collected during the turn)
+        // Tem Conscious: observation accumulators (collected during the turn)
         let mut classification_label = String::new();
         let mut difficulty_label = String::new();
         let mut tools_called_this_turn: Vec<String> = Vec::new();
@@ -508,7 +511,7 @@ impl AgentRuntime {
                         "V2: LLM classified message"
                     );
 
-                    // Tem Aware: capture classification for observation
+                    // Tem Conscious: capture classification for observation
                     classification_label = format!("{:?}", classification.category);
                     difficulty_label = format!("{:?}", classification.difficulty);
 
@@ -521,12 +524,12 @@ impl AgentRuntime {
                                 content: MessageContent::Text(classification.chat_text.clone()),
                             });
 
-                            // ── Tem Aware: post-observe Chat turns too ──
-                            if let Some(ref awareness) = self.awareness {
-                                let obs = crate::awareness::TurnObservation {
+                            // ── Tem Conscious: post-observe Chat turns too ──
+                            if let Some(ref consciousness_observer) = self.consciousness {
+                                let obs = crate::consciousness::TurnObservation {
                                     turn_number: turn_api_calls,
                                     session_id: session.session_id.clone(),
-                                    user_message_preview: crate::awareness::safe_preview(
+                                    user_message_preview: crate::consciousness::safe_preview(
                                         &user_text, 200,
                                     ),
                                     category: "Chat".to_string(),
@@ -541,14 +544,14 @@ impl AgentRuntime {
                                     tool_results: vec![],
                                     max_consecutive_failures: 0,
                                     strategy_rotations: 0,
-                                    response_preview: crate::awareness::safe_preview(
+                                    response_preview: crate::consciousness::safe_preview(
                                         &classification.chat_text,
                                         200,
                                     ),
                                     circuit_breaker_state: "active".to_string(),
-                                    previous_notes: awareness.session_notes(),
+                                    previous_notes: consciousness_observer.session_notes(),
                                 };
-                                awareness.post_observe(&obs).await;
+                                consciousness_observer.post_observe(&obs).await;
                             }
 
                             return Ok((
@@ -813,10 +816,10 @@ impl AgentRuntime {
                 });
             }
 
-            // ── Tem Aware: PRE-LLM consciousness (LLM-powered) ──────────
+            // ── Tem Conscious: PRE-LLM consciousness (LLM-powered) ──────────
             // A separate LLM call that THINKS about the upcoming turn.
-            if let Some(ref awareness) = self.awareness {
-                let pre_obs = crate::awareness_engine::PreObservation {
+            if let Some(ref consciousness_observer) = self.consciousness {
+                let pre_obs = crate::consciousness_engine::PreObservation {
                     user_message: user_text.clone(),
                     category: classification_label.clone(),
                     difficulty: difficulty_label.clone(),
@@ -825,10 +828,10 @@ impl AgentRuntime {
                     cumulative_cost_usd: self.budget.total_spend_usd(),
                     budget_limit_usd: self.budget.max_spend_usd(),
                 };
-                if let Some(injection) = awareness.pre_observe(&pre_obs).await {
+                if let Some(injection) = consciousness_observer.pre_observe(&pre_obs).await {
                     let consciousness_block = format!(
                         "{{{{consciousness}}}}\n\
-                         [Your awareness layer — a separate observer watching this conversation — shares this insight:]\n\
+                         [Your consciousness — a separate observer watching this conversation — shares this insight:]\n\
                          {}\n\
                          {{{{/consciousness}}}}",
                         injection
@@ -1342,13 +1345,13 @@ impl AgentRuntime {
                     }
                 }
 
-                // ── Tem Aware: POST-LLM consciousness (LLM-powered) ────
+                // ── Tem Conscious: POST-LLM consciousness (LLM-powered) ────
                 // A separate LLM call that EVALUATES what just happened.
-                if let Some(ref awareness) = self.awareness {
-                    let obs = crate::awareness::TurnObservation {
+                if let Some(ref consciousness_observer) = self.consciousness {
+                    let obs = crate::consciousness::TurnObservation {
                         turn_number: turn_api_calls,
                         session_id: session.session_id.clone(),
-                        user_message_preview: crate::awareness::safe_preview(&user_text, 200),
+                        user_message_preview: crate::consciousness::safe_preview(&user_text, 200),
                         category: classification_label.clone(),
                         difficulty: difficulty_label.clone(),
                         model_used: self.model.clone(),
@@ -1361,11 +1364,11 @@ impl AgentRuntime {
                         tool_results: tool_results_this_turn.clone(),
                         max_consecutive_failures: max_consecutive_failures_seen,
                         strategy_rotations: strategy_rotations_count,
-                        response_preview: crate::awareness::safe_preview(&reply_text, 200),
+                        response_preview: crate::consciousness::safe_preview(&reply_text, 200),
                         circuit_breaker_state: "active".to_string(),
-                        previous_notes: awareness.session_notes(),
+                        previous_notes: consciousness_observer.session_notes(),
                     };
-                    awareness.post_observe(&obs).await;
+                    consciousness_observer.post_observe(&obs).await;
                 }
 
                 // ── Status: Done ─────────────────────────────────
@@ -1511,10 +1514,10 @@ impl AgentRuntime {
                     failure_tracker.record_success(tool_name);
                 }
 
-                // Tem Aware: track tool calls and results for observation
+                // Tem Conscious: track tool calls and results for observation
                 tools_called_this_turn.push(tool_name.to_string());
                 if is_error {
-                    tool_results_this_turn.push(crate::awareness::safe_preview(&content, 100));
+                    tool_results_this_turn.push(crate::consciousness::safe_preview(&content, 100));
                     let fc = failure_tracker.failure_count(tool_name) as u32;
                     if fc > max_consecutive_failures_seen {
                         max_consecutive_failures_seen = fc;

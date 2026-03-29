@@ -67,44 +67,44 @@ pub struct Temm1eConfig {
     #[serde(default)]
     pub gaze: GazeConfig,
     #[serde(default)]
-    pub awareness: AwarenessConfig,
+    pub consciousness: ConsciousnessConfig,
 }
 
-/// Tem Aware configuration — consciousness observer sub-agent.
+/// Tem Conscious configuration — consciousness observer sub-agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AwarenessConfig {
-    /// Enable consciousness observation. Off by default.
-    #[serde(default)]
+pub struct ConsciousnessConfig {
+    /// Enable consciousness observation. ON by default.
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Minimum confidence to inject a whisper (0.0-1.0).
-    #[serde(default = "default_awareness_confidence")]
+    #[serde(default = "default_consciousness_confidence")]
     pub confidence_threshold: f64,
     /// Maximum interventions per session.
-    #[serde(default = "default_awareness_max_interventions")]
+    #[serde(default = "default_consciousness_max_interventions")]
     pub max_interventions_per_session: u32,
     /// Observation mode: "rules_first", "always_llm", "rules_only".
-    #[serde(default = "default_awareness_observation_mode")]
+    #[serde(default = "default_consciousness_observation_mode")]
     pub observation_mode: String,
 }
 
-impl Default for AwarenessConfig {
+impl Default for ConsciousnessConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            confidence_threshold: default_awareness_confidence(),
-            max_interventions_per_session: default_awareness_max_interventions(),
-            observation_mode: default_awareness_observation_mode(),
+            enabled: true,
+            confidence_threshold: default_consciousness_confidence(),
+            max_interventions_per_session: default_consciousness_max_interventions(),
+            observation_mode: default_consciousness_observation_mode(),
         }
     }
 }
 
-fn default_awareness_confidence() -> f64 {
+fn default_consciousness_confidence() -> f64 {
     0.7
 }
-fn default_awareness_max_interventions() -> u32 {
+fn default_consciousness_max_interventions() -> u32 {
     10
 }
-fn default_awareness_observation_mode() -> String {
+fn default_consciousness_observation_mode() -> String {
     "rules_first".into()
 }
 
@@ -923,7 +923,7 @@ mod tests {
             tunnel: None,
             observability: ObservabilityConfig::default(),
             gaze: GazeConfig::default(),
-            awareness: AwarenessConfig::default(),
+            consciousness: ConsciousnessConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();
