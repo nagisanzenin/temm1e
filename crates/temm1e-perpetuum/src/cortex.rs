@@ -76,7 +76,7 @@ impl Cortex {
             }
         };
 
-        if concern.state != "active" {
+        if concern.state != "active" && concern.state != "firing" {
             return;
         }
 
@@ -655,6 +655,7 @@ impl Cortex {
 
         if let Some(next) = next_fire {
             let mut updated = concern.clone();
+            updated.state = "active".to_string(); // Reset from 'firing' to 'active'
             updated.last_fired_at = Some(Utc::now().to_rfc3339());
             updated.next_fire_at = Some(next);
             updated.updated_at = Utc::now().to_rfc3339();

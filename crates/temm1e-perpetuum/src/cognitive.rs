@@ -35,7 +35,7 @@ impl LlmCaller for ProviderCaller {
                 content: MessageContent::Text(prompt.to_string()),
             }],
             tools: vec![],
-            max_tokens: Some(400),
+            max_tokens: None,
             temperature: Some(0.2),
             system: system.map(String::from),
         };

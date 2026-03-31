@@ -91,7 +91,7 @@ impl Pulse {
     }
 
     async fn fire_due_concerns(&self) {
-        let due = match self.store.get_due_concerns(Utc::now()).await {
+        let due = match self.store.claim_due_concerns(Utc::now()).await {
             Ok(ids) => ids,
             Err(e) => {
                 tracing::error!(target: "perpetuum", error = %e, "Failed to get due concerns");

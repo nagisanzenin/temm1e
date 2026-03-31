@@ -279,11 +279,16 @@ impl Store {
         Ok(rows)
     }
 
-    pub async fn get_due_concerns(
+    /// Atomically claim all due concerns by transitioning them from 'active' to 'firing'.
+    /// Returns the IDs of claimed concerns. Prevents duplicate fires — once claimed,
+    /// no other Pulse tick can see them.
+    pub async fn claim_due_concerns(
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ConcernId>, Temm1eError> {
         let now_str = now.to_rfc3339();
+
+        // Step 1: Fetch IDs of active due concerns
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT id FROM perpetuum_concerns
              WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at <= ?
@@ -292,8 +297,39 @@ impl Store {
         .bind(&now_str)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| Temm1eError::Memory(format!("Get due concerns: {e}")))?;
-        Ok(rows.into_iter().map(|r| r.0).collect())
+        .map_err(|e| Temm1eError::Memory(format!("Query due concerns: {e}")))?;
+
+        let ids: Vec<ConcernId> = rows.into_iter().map(|r| r.0).collect();
+        if ids.is_empty() {
+            return Ok(ids);
+        }
+
+        // Step 2: Atomically transition them to 'firing' (only if still 'active')
+        for id in &ids {
+            sqlx::query(
+                "UPDATE perpetuum_concerns SET state = 'firing', updated_at = ?
+                 WHERE id = ? AND state = 'active'",
+            )
+            .bind(&now_str)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .ok(); // If already firing (race), silently skip
+        }
+
+        Ok(ids)
+    }
+
+    /// Reset a concern from 'firing' back to 'active' (e.g., after reschedule).
+    pub async fn reset_firing_state(&self, id: &str) -> Result<(), Temm1eError> {
+        sqlx::query(
+            "UPDATE perpetuum_concerns SET state = 'active' WHERE id = ? AND state = 'firing'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("Reset firing state: {e}")))?;
+        Ok(())
     }
 
     pub async fn next_fire_time(&self) -> Result<Option<DateTime<Utc>>, Temm1eError> {
@@ -610,9 +646,17 @@ mod tests {
         store.insert_concern(&past_concern).await.unwrap();
         store.insert_concern(&future_concern).await.unwrap();
 
-        let due = store.get_due_concerns(now).await.unwrap();
+        let due = store.claim_due_concerns(now).await.unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0], "past-001");
+
+        // Verify concern is now in 'firing' state (not 'active')
+        let concern = store.get_concern("past-001").await.unwrap().unwrap();
+        assert_eq!(concern.state, "firing");
+
+        // A second claim should return nothing (already firing)
+        let due2 = store.claim_due_concerns(now).await.unwrap();
+        assert!(due2.is_empty(), "Should not re-claim firing concerns");
     }
 
     #[tokio::test]

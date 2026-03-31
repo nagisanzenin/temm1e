@@ -4858,10 +4858,11 @@ Just type a message to chat with the AI agent.",
                                     },
                                 };
 
-                                // Need a channel_map for Perpetuum — CLI only
-                                let cli_channel_map: Arc<
-                                    HashMap<String, Arc<dyn temm1e_core::Channel>>,
-                                > = Arc::new(HashMap::new());
+                                // Register CLI channel for Perpetuum notifications
+                                let mut cli_ch_map: HashMap<String, Arc<dyn temm1e_core::Channel>> =
+                                    HashMap::new();
+                                cli_ch_map.insert("cli".to_string(), cli_arc.clone());
+                                let cli_channel_map = Arc::new(cli_ch_map);
 
                                 match temm1e_perpetuum::Perpetuum::new(
                                     perp_config,
