@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use base64::Engine;
+use temm1e_core::types::config::{PersonalityProfile, SharedPersonality};
 use temm1e_core::types::error::Temm1eError;
 use temm1e_core::types::message::{
     ChatMessage, ContentPart, InboundMessage, MessageContent, OutboundMessage, ParseMode, Role,
@@ -98,6 +99,9 @@ pub struct AgentRuntime {
     /// Perpetuum temporal context injection string. Updated externally before each call.
     /// When set, prepended to the system prompt for time awareness.
     perpetuum_temporal: Option<Arc<RwLock<String>>>,
+    /// Configurable personality profile. When set, customizes identity prompts,
+    /// mode blocks, and consciousness observer text.
+    personality: Option<SharedPersonality>,
 }
 
 impl AgentRuntime {
@@ -133,6 +137,7 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            personality: None,
         }
     }
 
@@ -202,6 +207,7 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            personality: None,
         }
     }
 
@@ -215,6 +221,12 @@ impl AgentRuntime {
     /// Set the shared personality mode from an Option (convenience for propagation).
     pub fn with_shared_mode_opt(mut self, mode: Option<SharedMode>) -> Self {
         self.shared_mode = mode;
+        self
+    }
+
+    /// Set a custom personality profile for identity/prompt customization.
+    pub fn with_personality(mut self, personality: SharedPersonality) -> Self {
+        self.personality = Some(personality);
         self
     }
 
@@ -495,6 +507,7 @@ impl AgentRuntime {
                 &session.history,
                 &blueprint_categories,
                 current_mode,
+                self.personality.as_deref(),
             )
             .await
             {
@@ -821,7 +834,7 @@ impl AgentRuntime {
             // ── Personality mode injection ──────────────────────────────
             if let Some(ref shared_mode) = self.shared_mode {
                 let mode = *shared_mode.read().await;
-                let mode_block = mode_prompt_block(mode);
+                let mode_block = mode_prompt_block(mode, self.personality.as_deref());
                 request.system = Some(match request.system {
                     Some(existing) => format!("{mode_block}\n\n{existing}"),
                     None => mode_block,
@@ -1938,10 +1951,23 @@ fn extract_text_from_response(content: &[temm1e_core::types::message::ContentPar
         .join("\n")
 }
 
-/// Check whether a model supports vision (image) inputs.
-///
 /// Build the personality-mode system prompt block for the given mode.
-fn mode_prompt_block(mode: Temm1eMode) -> String {
+/// If a custom mode prompt is configured in the personality profile, use it;
+/// otherwise fall back to the built-in default.
+fn mode_prompt_block(mode: Temm1eMode, personality: Option<&PersonalityProfile>) -> String {
+    let mode_key = match mode {
+        Temm1eMode::Play => "play",
+        Temm1eMode::Work => "work",
+        Temm1eMode::Pro => "pro",
+        Temm1eMode::None => "none",
+    };
+
+    // Use custom mode prompt if configured
+    if let Some(custom) = personality.and_then(|p| p.mode_prompt(mode_key)) {
+        return custom.to_string();
+    }
+
+    // Built-in defaults
     match mode {
         Temm1eMode::Play => "\
 === TEMM1E MODE: PLAY ===

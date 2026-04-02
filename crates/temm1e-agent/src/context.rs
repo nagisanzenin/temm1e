@@ -101,6 +101,7 @@ pub async fn build_context(
                 &session.workspace_path,
                 false, // done_criteria handled separately
                 tier,
+                None, // personality — threaded at runtime layer
             ))
         }
         _ => build_system_prompt(system_prompt, tools, session),

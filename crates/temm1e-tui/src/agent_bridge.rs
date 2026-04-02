@@ -134,6 +134,7 @@ pub async fn spawn_agent(
         None, // No usage store for tools
         Some(shared_mode.clone()),
         None, // No vault for TUI mode
+        None, // No custom personality for TUI mode
     );
 
     // 5. Build system prompt

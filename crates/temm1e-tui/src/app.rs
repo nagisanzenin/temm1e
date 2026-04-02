@@ -73,6 +73,10 @@ pub struct AppState {
     pub pending_user_message: Option<String>,
     /// API key from onboarding, held for async validation/save.
     pub onboarding_api_key: Option<String>,
+    /// Custom personality name from onboarding (None = default TEMM1E).
+    pub custom_personality_name: Option<String>,
+    /// Custom personality nickname from onboarding (None = default Tem).
+    pub custom_personality_nickname: Option<String>,
 
     // Exit — Ctrl+C twice like Claude Code
     pub last_ctrl_c: Option<std::time::Instant>,
@@ -104,6 +108,8 @@ impl AppState {
             onboarding_step: OnboardingStep::Welcome,
             pending_user_message: None,
             onboarding_api_key: None,
+            custom_personality_name: None,
+            custom_personality_nickname: None,
             last_ctrl_c: None,
             needs_redraw: true,
             needs_clear: false,
@@ -513,12 +519,88 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
             KeyCode::Enter => {
                 if let Some(mode) = select.selected_value().cloned() {
                     state.selected_mode = Some(mode);
-                    let items = steps::provider_select_items();
-                    state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
+                    let items = steps::personality_select_items();
+                    state.onboarding_step =
+                        OnboardingStep::ConfigurePersonality(SelectState::new(items));
                 }
             }
             KeyCode::Esc => {
                 state.onboarding_step = OnboardingStep::Welcome;
+            }
+            _ => {}
+        },
+        OnboardingStep::ConfigurePersonality(select) => match key.code {
+            KeyCode::Up => select.move_up(),
+            KeyCode::Down => select.move_down(),
+            KeyCode::Enter => {
+                if let Some(choice) = select.selected_value().cloned() {
+                    if choice == "custom" {
+                        state.onboarding_step = OnboardingStep::EnterPersonalityName {
+                            name_input: String::new(),
+                            nickname_input: String::new(),
+                            editing_nickname: false,
+                        };
+                    } else {
+                        // Default — proceed to provider
+                        let items = steps::provider_select_items();
+                        state.onboarding_step =
+                            OnboardingStep::SelectProvider(SelectState::new(items));
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                let items = steps::mode_select_items();
+                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
+            }
+            _ => {}
+        },
+        OnboardingStep::EnterPersonalityName {
+            name_input,
+            nickname_input,
+            editing_nickname,
+        } => match key.code {
+            KeyCode::Char(c) => {
+                if *editing_nickname {
+                    nickname_input.push(c);
+                } else {
+                    name_input.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if *editing_nickname {
+                    nickname_input.pop();
+                } else {
+                    name_input.pop();
+                }
+            }
+            KeyCode::Tab => {
+                *editing_nickname = !*editing_nickname;
+            }
+            KeyCode::Enter => {
+                if !*editing_nickname {
+                    // Move to nickname field
+                    *editing_nickname = true;
+                } else {
+                    // Save and proceed
+                    state.custom_personality_name = if name_input.is_empty() {
+                        None
+                    } else {
+                        Some(name_input.clone())
+                    };
+                    state.custom_personality_nickname = if nickname_input.is_empty() {
+                        None
+                    } else {
+                        Some(nickname_input.clone())
+                    };
+                    let items = steps::provider_select_items();
+                    state.onboarding_step =
+                        OnboardingStep::SelectProvider(SelectState::new(items));
+                }
+            }
+            KeyCode::Esc => {
+                let items = steps::personality_select_items();
+                state.onboarding_step =
+                    OnboardingStep::ConfigurePersonality(SelectState::new(items));
             }
             _ => {}
         },
@@ -535,8 +617,9 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
                 }
             }
             KeyCode::Esc => {
-                let items = steps::mode_select_items();
-                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
+                let items = steps::personality_select_items();
+                state.onboarding_step =
+                    OnboardingStep::ConfigurePersonality(SelectState::new(items));
             }
             _ => {}
         },

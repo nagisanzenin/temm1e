@@ -7,6 +7,13 @@ use crate::widgets::select_list::{SelectItem, SelectState};
 pub enum OnboardingStep {
     Welcome,
     SelectMode(SelectState<String>),
+    ConfigurePersonality(SelectState<String>),
+    EnterPersonalityName {
+        name_input: String,
+        nickname_input: String,
+        /// Which field is active: false = name, true = nickname
+        editing_nickname: bool,
+    },
     SelectProvider(SelectState<String>),
     EnterApiKey {
         provider: String,
@@ -52,6 +59,22 @@ pub fn mode_select_items() -> Vec<SelectItem<String>> {
             value: "none".to_string(),
             label: "None".to_string(),
             description: "No personality, minimal identity prompt".to_string(),
+        },
+    ]
+}
+
+/// Create the personality profile selection list.
+pub fn personality_select_items() -> Vec<SelectItem<String>> {
+    vec![
+        SelectItem {
+            value: "default".to_string(),
+            label: "Default (TEMM1E)".to_string(),
+            description: "Use the built-in TEMM1E personality (recommended)".to_string(),
+        },
+        SelectItem {
+            value: "custom".to_string(),
+            label: "Custom".to_string(),
+            description: "Set a custom name and identity".to_string(),
         },
     ]
 }

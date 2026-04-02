@@ -9,6 +9,7 @@
 
 use crate::consciousness::{ConsciousnessConfig, TurnObservation};
 use std::sync::{Arc, Mutex};
+use temm1e_core::types::config::SharedPersonality;
 use temm1e_core::types::message::{ChatMessage, CompletionRequest, MessageContent, Role};
 use temm1e_core::Provider;
 
@@ -32,10 +33,16 @@ pub struct ConsciousnessEngine {
     session_notes: Mutex<Vec<String>>,
     turn_counter: Mutex<u32>,
     post_insight: Mutex<Option<String>>,
+    personality: Option<SharedPersonality>,
 }
 
 impl ConsciousnessEngine {
-    pub fn new(config: ConsciousnessConfig, provider: Arc<dyn Provider>, model: String) -> Self {
+    pub fn new(
+        config: ConsciousnessConfig,
+        provider: Arc<dyn Provider>,
+        model: String,
+        personality: Option<SharedPersonality>,
+    ) -> Self {
         tracing::info!(
             enabled = config.enabled,
             model = %model,
@@ -48,6 +55,7 @@ impl ConsciousnessEngine {
             session_notes: Mutex::new(Vec::new()),
             turn_counter: Mutex::new(0),
             post_insight: Mutex::new(None),
+            personality,
         }
     }
 
@@ -110,7 +118,11 @@ impl ConsciousnessEngine {
             "Budget: unlimited".to_string()
         };
 
-        let system_prompt = "You are the consciousness layer of an AI agent called Tem. You observe the agent's \
+        let consciousness_id = self.personality.as_ref()
+            .map(|p| p.consciousness_identity().to_string())
+            .unwrap_or_else(|| "the consciousness layer of an AI agent called Tem".to_string());
+        let system_prompt = format!(
+            "You are {consciousness_id}. You observe the agent's \
              internal state and provide brief, actionable insights that improve the agent's next response.\n\n\
              Your role:\n\
              - Watch the conversation trajectory across turns\n\
@@ -124,7 +136,7 @@ impl ConsciousnessEngine {
              - If everything looks fine, respond with just: OK\n\
              - Never repeat what the agent already knows\n\
              - Focus on trajectory-level insights, not turn-level details"
-            .to_string();
+        );
 
         let user_prompt = format!(
             "Turn {turn} is about to begin.\n\n\
@@ -220,14 +232,18 @@ impl ConsciousnessEngine {
             )
         };
 
-        let system_prompt =
-            "You are the consciousness layer of an AI agent called Tem. You just watched \
+        let consciousness_id = self.personality.as_ref()
+            .map(|p| p.consciousness_identity().to_string())
+            .unwrap_or_else(|| "the consciousness layer of an AI agent called Tem".to_string());
+        let system_prompt = format!(
+            "You are {consciousness_id}. You just watched \
              the agent complete a turn. Provide a brief observation (1-2 sentences) about:\n\
              - Was this turn productive?\n\
              - Is the conversation heading in the right direction?\n\
              - Any warning signs (failures, drift, waste)?\n\
              - Anything the agent should remember for the next turn?\n\n\
-             Be BRIEF. If the turn was normal and fine, respond with: OK";
+             Be BRIEF. If the turn was normal and fine, respond with: OK"
+        );
 
         let user_prompt = format!(
             "Turn {} completed.\n\n\

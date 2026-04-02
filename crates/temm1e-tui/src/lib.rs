@@ -314,6 +314,15 @@ async fn handle_onboarding_async(
                     .clone()
                     .unwrap_or_else(|| default_model(provider).to_string());
 
+                // Apply custom personality to config if set during onboarding
+                let mut agent_config = config.clone();
+                if let Some(ref name) = state.custom_personality_name {
+                    agent_config.personality.name = Some(name.clone());
+                }
+                if let Some(ref nick) = state.custom_personality_nickname {
+                    agent_config.personality.nickname = Some(nick.clone());
+                }
+
                 match save_credentials(provider, api_key, &model, None).await {
                     Ok(()) => {
                         match agent_bridge::spawn_agent(
@@ -322,7 +331,7 @@ async fn handle_onboarding_async(
                                 api_key: api_key.clone(),
                                 model: model.clone(),
                                 base_url: None,
-                                config: config.clone(),
+                                config: agent_config,
                                 mode: state.selected_mode.clone(),
                             },
                             event_tx.clone(),

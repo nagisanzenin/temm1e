@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use super::error::Temm1eError;
 
@@ -30,12 +31,103 @@ impl std::fmt::Display for Temm1eMode {
     }
 }
 
+/// Configurable personality profile. All fields optional — when absent,
+/// the built-in TEMM1E personality is used (full backwards compatibility).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersonalityProfile {
+    /// Display name (default: "TEMM1E")
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Short nickname used in prompts (default: "Tem")
+    #[serde(default)]
+    pub nickname: Option<String>,
+    /// Full identity text — replaces the entire YOUR SOUL + VALUES + COMMUNICATION RULES block.
+    #[serde(default)]
+    pub identity: Option<String>,
+    /// One-line classifier description (default: "a cat-dog hybrid AI with AuDHD — genuine, warm, never sycophantic")
+    #[serde(default)]
+    pub classifier_description: Option<String>,
+    /// Mode-specific prompt blocks. Keys: "play", "work", "pro", "none".
+    /// Each value replaces the full mode prompt block for that mode.
+    #[serde(default)]
+    pub mode_prompts: Option<HashMap<String, String>>,
+    /// Mode-specific classifier voice rules. Keys: "play", "work", "pro", "none".
+    #[serde(default)]
+    pub classifier_mode_rules: Option<HashMap<String, String>>,
+    /// Gateway/CLI base system prompt. Replaces SYSTEM_PROMPT_BASE entirely.
+    #[serde(default)]
+    pub gateway_system_prompt: Option<String>,
+    /// Consciousness observer identity description (default: "consciousness layer of an AI agent called Tem")
+    #[serde(default)]
+    pub consciousness_identity: Option<String>,
+    /// Mode switch confirmation messages. Keys: "play", "work", "pro".
+    #[serde(default)]
+    pub mode_switch_messages: Option<HashMap<String, String>>,
+}
+
+impl PersonalityProfile {
+    /// Display name (default: "TEMM1E").
+    pub fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("TEMM1E")
+    }
+
+    /// Short nickname (default: "Tem").
+    pub fn nickname(&self) -> &str {
+        self.nickname.as_deref().unwrap_or("Tem")
+    }
+
+    /// Full identity text override. Returns `None` when the built-in default should be used.
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+
+    /// One-line classifier description.
+    pub fn classifier_description(&self) -> &str {
+        self.classifier_description.as_deref().unwrap_or(
+            "a cat-dog hybrid AI with AuDHD — genuine, warm, never sycophantic"
+        )
+    }
+
+    /// Custom mode prompt for the given mode key ("play", "work", "pro", "none").
+    pub fn mode_prompt(&self, mode: &str) -> Option<&str> {
+        self.mode_prompts.as_ref()?.get(mode).map(|s| s.as_str())
+    }
+
+    /// Custom classifier voice rules for the given mode key.
+    pub fn classifier_mode_rule(&self, mode: &str) -> Option<&str> {
+        self.classifier_mode_rules.as_ref()?.get(mode).map(|s| s.as_str())
+    }
+
+    /// Gateway/CLI base system prompt override. Returns `None` when the built-in default should be used.
+    pub fn gateway_system_prompt(&self) -> Option<&str> {
+        self.gateway_system_prompt.as_deref()
+    }
+
+    /// Consciousness observer identity description.
+    pub fn consciousness_identity(&self) -> &str {
+        self.consciousness_identity.as_deref().unwrap_or(
+            "the consciousness layer of an AI agent called Tem"
+        )
+    }
+
+    /// Custom mode switch confirmation message for the given mode key.
+    pub fn mode_switch_message(&self, mode: &str) -> Option<&str> {
+        self.mode_switch_messages.as_ref()?.get(mode).map(|s| s.as_str())
+    }
+}
+
+/// Shared personality profile (read-only after startup).
+pub type SharedPersonality = Arc<PersonalityProfile>;
+
 /// Top-level TEMM1E configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Temm1eConfig {
     /// Temm1e's personality mode (play or work). Defaults to play.
     #[serde(default)]
     pub mode: Temm1eMode,
+    /// Configurable personality profile. Defaults to built-in TEMM1E personality.
+    #[serde(default)]
+    pub personality: PersonalityProfile,
     #[serde(default)]
     pub temm1e: Temm1eSection,
     #[serde(default)]
@@ -983,6 +1075,7 @@ mod tests {
             gaze: GazeConfig::default(),
             consciousness: ConsciousnessConfig::default(),
             perpetuum: PerpetualConfig::default(),
+            personality: PersonalityProfile::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();

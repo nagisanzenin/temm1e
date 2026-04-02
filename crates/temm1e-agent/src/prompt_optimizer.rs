@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use temm1e_core::types::config::AgentConfig;
+use temm1e_core::types::config::{AgentConfig, PersonalityProfile};
 use temm1e_core::types::optimization::PromptTier;
 use temm1e_core::Tool;
 use tracing::debug;
@@ -66,6 +66,7 @@ pub struct SystemPromptBuilder<'a> {
     has_done_criteria: bool,
     config: Option<&'a AgentConfig>,
     prompt_tier: PromptTier,
+    personality: Option<&'a PersonalityProfile>,
 }
 
 impl<'a> SystemPromptBuilder<'a> {
@@ -77,6 +78,7 @@ impl<'a> SystemPromptBuilder<'a> {
             has_done_criteria: false,
             config: None,
             prompt_tier: PromptTier::Standard,
+            personality: None,
         }
     }
 
@@ -110,6 +112,12 @@ impl<'a> SystemPromptBuilder<'a> {
     /// Set the prompt tier for token-optimized prompt construction.
     pub fn prompt_tier(mut self, tier: PromptTier) -> Self {
         self.prompt_tier = tier;
+        self
+    }
+
+    /// Optionally attach a personality profile for customizable identity.
+    pub fn personality(mut self, profile: &'a PersonalityProfile) -> Self {
+        self.personality = Some(profile);
         self
     }
 
@@ -219,6 +227,14 @@ impl<'a> SystemPromptBuilder<'a> {
     // -- Section builders ---------------------------------------------------
 
     fn section_identity(&self) -> PromptSection {
+        // If a custom identity is configured, use it instead of the built-in default.
+        if let Some(custom) = self.personality.and_then(|p| p.identity()) {
+            return PromptSection {
+                name: "identity",
+                text: custom.to_string(),
+            };
+        }
+
         PromptSection {
             name: "identity",
             text: concat!(
@@ -437,13 +453,17 @@ pub fn build_system_prompt(
     tools: &[&dyn Tool],
     workspace: &Path,
     has_done_criteria: bool,
+    personality: Option<&PersonalityProfile>,
 ) -> String {
-    SystemPromptBuilder::new()
+    let mut builder = SystemPromptBuilder::new()
         .config(config)
         .tools(tools)
         .workspace(workspace)
-        .done_criteria(has_done_criteria)
-        .build()
+        .done_criteria(has_done_criteria);
+    if let Some(p) = personality {
+        builder = builder.personality(p);
+    }
+    builder.build()
 }
 
 /// Build a tier-aware system prompt. Uses prompt stratification to minimize
@@ -454,14 +474,18 @@ pub fn build_tiered_system_prompt(
     workspace: &Path,
     has_done_criteria: bool,
     tier: PromptTier,
+    personality: Option<&PersonalityProfile>,
 ) -> String {
-    SystemPromptBuilder::new()
+    let mut builder = SystemPromptBuilder::new()
         .config(config)
         .tools(tools)
         .workspace(workspace)
         .done_criteria(has_done_criteria)
-        .prompt_tier(tier)
-        .build()
+        .prompt_tier(tier);
+    if let Some(p) = personality {
+        builder = builder.personality(p);
+    }
+    builder.build()
 }
 
 // ---------------------------------------------------------------------------
@@ -689,7 +713,7 @@ mod tests {
         let shell = MockTool::new("shell");
         let tools: Vec<&dyn Tool> = vec![&shell];
 
-        let prompt = build_system_prompt(&config, &tools, &workspace(), false);
+        let prompt = build_system_prompt(&config, &tools, &workspace(), false, None);
 
         assert!(prompt.contains("TEMM1E"));
         assert!(prompt.contains("Available tools: shell"));
@@ -701,7 +725,7 @@ mod tests {
         let config = AgentConfig::default();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let prompt = build_system_prompt(&config, &tools, &workspace(), true);
+        let prompt = build_system_prompt(&config, &tools, &workspace(), true, None);
 
         assert!(prompt.contains("DONE criteria"));
     }
@@ -767,7 +791,7 @@ mod tests {
         let tools: Vec<&dyn Tool> = vec![&shell];
         let config = AgentConfig::default();
 
-        let prompt = build_system_prompt(&config, &tools, &workspace(), true);
+        let prompt = build_system_prompt(&config, &tools, &workspace(), true, None);
 
         assert!(prompt.contains("Never expose secrets"));
     }

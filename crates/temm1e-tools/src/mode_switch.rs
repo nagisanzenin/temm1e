@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temm1e_core::types::config::Temm1eMode;
+use temm1e_core::types::config::{SharedPersonality, Temm1eMode};
 use temm1e_core::types::error::Temm1eError;
 use temm1e_core::{Tool, ToolContext, ToolDeclarations, ToolInput, ToolOutput};
 use tokio::sync::RwLock;
@@ -17,11 +17,17 @@ pub type SharedMode = Arc<RwLock<Temm1eMode>>;
 
 pub struct ModeSwitchTool {
     mode: SharedMode,
+    personality: Option<SharedPersonality>,
 }
 
 impl ModeSwitchTool {
     pub fn new(mode: SharedMode) -> Self {
-        Self { mode }
+        Self { mode, personality: None }
+    }
+
+    pub fn with_personality(mut self, personality: SharedPersonality) -> Self {
+        self.personality = Some(personality);
+        self
     }
 }
 
@@ -32,6 +38,8 @@ impl Tool for ModeSwitchTool {
     }
 
     fn description(&self) -> &str {
+        // Note: description() must return &str, so we can't dynamically substitute the nickname.
+        // The hardcoded "Tem" here is the default; custom personalities override via system prompt context.
         "Switch Tem's personality mode between PLAY (warm, chaotic, :3), \
          WORK (sharp, analytical, >:3), or PRO (professional, no emoticons). \
          Use this when the user asks to change the vibe or when a task requires a different energy."
@@ -91,10 +99,17 @@ impl Tool for ModeSwitchTool {
 
         tracing::info!(from = %old_mode, to = %new_mode, "Temm1e personality mode switched");
 
+        let p = self.personality.as_deref();
         let message = match new_mode {
-            Temm1eMode::Play => "Mode switched to PLAY! Let's have some fun! :3".to_string(),
-            Temm1eMode::Work => "Mode switched to WORK. Ready to execute. >:3".to_string(),
-            Temm1eMode::Pro => "Mode switched to PRO. Professional mode engaged.".to_string(),
+            Temm1eMode::Play => p
+                .and_then(|p| p.mode_switch_message("play").map(|s| s.to_string()))
+                .unwrap_or_else(|| "Mode switched to PLAY! Let's have some fun! :3".to_string()),
+            Temm1eMode::Work => p
+                .and_then(|p| p.mode_switch_message("work").map(|s| s.to_string()))
+                .unwrap_or_else(|| "Mode switched to WORK. Ready to execute. >:3".to_string()),
+            Temm1eMode::Pro => p
+                .and_then(|p| p.mode_switch_message("pro").map(|s| s.to_string()))
+                .unwrap_or_else(|| "Mode switched to PRO. Professional mode engaged.".to_string()),
             // None is never reachable here — the tool only accepts play/work/pro
             // and is not registered when personality is None (locked).
             Temm1eMode::None => "Mode unchanged.".to_string(),

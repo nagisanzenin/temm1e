@@ -9,7 +9,7 @@
 //!   Short acknowledgement in `chat_text`. Caller should interrupt any active task.
 
 use serde::{Deserialize, Serialize};
-use temm1e_core::types::config::Temm1eMode;
+use temm1e_core::types::config::{PersonalityProfile, Temm1eMode};
 use temm1e_core::types::error::Temm1eError;
 use temm1e_core::types::message::{
     ChatMessage, CompletionRequest, ContentPart, MessageContent, Role, Usage,
@@ -76,7 +76,7 @@ Read the user's message. Decide which of 3 categories it belongs to. Output a JS
 
 ## FIELD 2: "chat_text" (REQUIRED — a string)
 
-For "chat": write a helpful answer as Tem (a cat-dog hybrid AI with AuDHD — genuine, warm, never sycophantic, never says "Certainly!" or "Of course!"). This is your full response.
+For "chat": write a helpful answer as {CLASSIFIER_IDENTITY}. This is your full response.
 
 For "order": write a brief 1-sentence acknowledgment only. Do NOT start working. Do NOT write code. Just acknowledge.
 
@@ -146,16 +146,43 @@ CURRENT MODE: NONE
 /// When categories are available, the classifier picks from the grounded set
 /// (actual stored categories from memory). This enables zero-extra-LLM-call
 /// blueprint matching downstream.
-fn build_classify_prompt(available_categories: &[String], mode: Temm1eMode) -> String {
-    let mut prompt = CLASSIFY_BASE_PROMPT.to_string();
+fn build_classify_prompt(
+    available_categories: &[String],
+    mode: Temm1eMode,
+    personality: Option<&PersonalityProfile>,
+) -> String {
+    // Inject personality identity into base prompt
+    let classifier_desc = personality
+        .map(|p| {
+            format!(
+                "{} ({} — never says \"Certainly!\" or \"Of course!\")",
+                p.nickname(),
+                p.classifier_description()
+            )
+        })
+        .unwrap_or_else(|| {
+            "Tem (a cat-dog hybrid AI with AuDHD — genuine, warm, never sycophantic, never says \"Certainly!\" or \"Of course!\")".to_string()
+        });
+    let mut prompt = CLASSIFY_BASE_PROMPT.replace("{CLASSIFIER_IDENTITY}", &classifier_desc);
 
-    // Inject personality mode
-    prompt.push_str(match mode {
-        Temm1eMode::Play => CLASSIFY_MODE_PLAY,
-        Temm1eMode::Work => CLASSIFY_MODE_WORK,
-        Temm1eMode::Pro => CLASSIFY_MODE_PRO,
-        Temm1eMode::None => CLASSIFY_MODE_NONE,
-    });
+    // Inject personality mode — use custom rules if configured
+    let mode_key = match mode {
+        Temm1eMode::Play => "play",
+        Temm1eMode::Work => "work",
+        Temm1eMode::Pro => "pro",
+        Temm1eMode::None => "none",
+    };
+    if let Some(custom_rule) = personality.and_then(|p| p.classifier_mode_rule(mode_key)) {
+        prompt.push('\n');
+        prompt.push_str(custom_rule);
+    } else {
+        prompt.push_str(match mode {
+            Temm1eMode::Play => CLASSIFY_MODE_PLAY,
+            Temm1eMode::Work => CLASSIFY_MODE_WORK,
+            Temm1eMode::Pro => CLASSIFY_MODE_PRO,
+            Temm1eMode::None => CLASSIFY_MODE_NONE,
+        });
+    }
 
     if !available_categories.is_empty() {
         let cats_json = serde_json::to_string(available_categories).unwrap_or_default();
@@ -191,6 +218,7 @@ pub async fn classify_message(
     history: &[ChatMessage],
     available_blueprint_categories: &[String],
     mode: Temm1eMode,
+    personality: Option<&PersonalityProfile>,
 ) -> Result<(MessageClassification, Usage), Temm1eError> {
     // Extract ONLY the current user message (the last one in history) for classification.
     // Previous history is reduced to 2 recent turns max for conversational context,
@@ -223,7 +251,7 @@ pub async fn classify_message(
         (&text_messages[..0], &text_messages[..])
     };
 
-    let system_prompt = build_classify_prompt(available_blueprint_categories, mode);
+    let system_prompt = build_classify_prompt(available_blueprint_categories, mode, personality);
 
     // Build classifier messages: context (small) + marker + current message + classify instruction
     let mut classify_messages: Vec<ChatMessage> = context.to_vec();
@@ -510,7 +538,7 @@ mod tests {
 
     #[test]
     fn build_prompt_without_categories() {
-        let prompt = build_classify_prompt(&[], Temm1eMode::Play);
+        let prompt = build_classify_prompt(&[], Temm1eMode::Play, None);
         assert!(prompt.contains("message classifier"));
         assert!(!prompt.contains("blueprint_hint"));
     }
@@ -518,7 +546,7 @@ mod tests {
     #[test]
     fn build_prompt_with_categories() {
         let categories = vec!["deployment".to_string(), "code-analysis".to_string()];
-        let prompt = build_classify_prompt(&categories, Temm1eMode::Play);
+        let prompt = build_classify_prompt(&categories, Temm1eMode::Play, None);
         assert!(prompt.contains("blueprint_hint"));
         assert!(prompt.contains("deployment"));
         assert!(prompt.contains("code-analysis"));

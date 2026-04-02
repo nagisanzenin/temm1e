@@ -46,7 +46,7 @@ pub use usage_audit::UsageAuditTool;
 pub use web_fetch::WebFetchTool;
 
 use std::sync::Arc;
-use temm1e_core::types::config::ToolsConfig;
+use temm1e_core::types::config::{SharedPersonality, ToolsConfig};
 use temm1e_core::{Channel, Memory, SetupLinkGenerator, Tool, UsageStore, Vault};
 
 /// Create tools based on the configuration flags.
@@ -65,6 +65,7 @@ pub fn create_tools(
     usage_store: Option<Arc<dyn UsageStore>>,
     shared_mode: Option<SharedMode>,
     vault: Option<Arc<dyn Vault>>,
+    personality: Option<SharedPersonality>,
 ) -> Vec<Arc<dyn Tool>> {
     // vault is only used when browser feature is enabled
     let _ = &vault;
@@ -122,7 +123,13 @@ pub fn create_tools(
 
     // mode_switch: toggle personality mode between PLAY, WORK, and PRO
     if let Some(mode) = shared_mode {
-        tools.push(Arc::new(ModeSwitchTool::new(mode)));
+        let tool = ModeSwitchTool::new(mode);
+        let tool = if let Some(ref p) = personality {
+            tool.with_personality(Arc::clone(p))
+        } else {
+            tool
+        };
+        tools.push(Arc::new(tool));
     }
 
     // browser: headless Chrome automation (stealth mode)
@@ -165,6 +172,7 @@ pub fn create_tools_with_browser(
     usage_store: Option<Arc<dyn UsageStore>>,
     shared_mode: Option<SharedMode>,
     vault: Option<Arc<dyn Vault>>,
+    personality: Option<SharedPersonality>,
 ) -> (Vec<Arc<dyn Tool>>, Option<Arc<BrowserTool>>) {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
@@ -209,7 +217,13 @@ pub fn create_tools_with_browser(
     }
 
     if let Some(mode) = shared_mode {
-        tools.push(Arc::new(ModeSwitchTool::new(mode)));
+        let tool = ModeSwitchTool::new(mode);
+        let tool = if let Some(ref p) = personality {
+            tool.with_personality(Arc::clone(p))
+        } else {
+            tool
+        };
+        tools.push(Arc::new(tool));
     }
 
     // browser: create as Arc<BrowserTool> and keep a reference

@@ -48,6 +48,85 @@ pub fn render_onboarding(step: &OnboardingStep, theme: &Theme, area: Rect, buf: 
             )));
             hint.render(chunks[2], buf);
         }
+        OnboardingStep::ConfigurePersonality(state) => {
+            let widget = SelectListWidget::new(state)
+                .normal_style(theme.text)
+                .selected_style(theme.accent.add_modifier(Modifier::REVERSED))
+                .description_style(theme.secondary);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(2),
+                    Constraint::Min(1),
+                    Constraint::Length(2),
+                ])
+                .split(inner);
+            let title = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(" Personality profile:", theme.heading)),
+            ]);
+            title.render(chunks[0], buf);
+            widget.render(chunks[1], buf);
+            let hint = Paragraph::new(Line::from(Span::styled(
+                "  \u{2191}\u{2193} select  Enter confirm  Esc back",
+                theme.secondary,
+            )));
+            hint.render(chunks[2], buf);
+        }
+        OnboardingStep::EnterPersonalityName {
+            name_input,
+            nickname_input,
+            editing_nickname,
+        } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(" Custom personality:", theme.heading)),
+                Line::from(""),
+            ];
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  Name: ",
+                    if *editing_nickname {
+                        theme.secondary
+                    } else {
+                        theme.prompt
+                    },
+                ),
+                Span::styled(
+                    if !*editing_nickname {
+                        format!("{}\u{2588}", name_input)
+                    } else {
+                        name_input.clone()
+                    },
+                    theme.text,
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  Nickname: ",
+                    if *editing_nickname {
+                        theme.prompt
+                    } else {
+                        theme.secondary
+                    },
+                ),
+                Span::styled(
+                    if *editing_nickname {
+                        format!("{}\u{2588}", nickname_input)
+                    } else {
+                        nickname_input.clone()
+                    },
+                    theme.text,
+                ),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Enter next field/confirm  Tab switch  Esc back",
+                theme.secondary,
+            )));
+            let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+            para.render(inner, buf);
+        }
         OnboardingStep::SelectProvider(state) => {
             let widget = SelectListWidget::new(state)
                 .normal_style(theme.text)
