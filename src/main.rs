@@ -354,8 +354,14 @@ You have full access to these tools:\n\
 - shell: run any command\n\
 - file_read / file_write / file_list: filesystem operations\n\
 - web_fetch: HTTP GET requests\n\
-- browser: control a real Chrome browser (navigate, click, type, screenshot, \
-  get_text, evaluate JS, get_html) — use this for any website interaction\n\
+- browser: control a real Chrome browser with these actions:\n\
+  * navigate: browser(action=\"navigate\", url=\"https://example.com\")\n\
+  * click: browser(action=\"click\", selector=\"button.submit\")\n\
+  * type: browser(action=\"type\", selector=\"input#search\", text=\"query\")\n\
+  * screenshot: browser(action=\"screenshot\", filename=\"page.png\")\n\
+  * get_text: browser(action=\"get_text\") - get page content\n\
+  * evaluate: browser(action=\"evaluate\", script=\"document.title\")\n\
+  * close: browser(action=\"close\") - close browser when done\n\
 - send_message: send real-time messages to the user during tasks\n\
 - send_file: send files to the user\n\
 - memory_manage: your persistent knowledge store (remember/recall/forget/update/list)\n\n\
@@ -3528,7 +3534,7 @@ Just type a message to chat with the AI agent.",
                                         {
                                             use std::os::windows::process::CommandExt;
                                             let _ = std::process::Command::new("cmd")
-                                                .args(["/C", &format!("timeout /t 2 /nobreak >nul && \"{}\" start", exe_str)])
+                                                .args(["/C", &format!("timeout /t 2 /nobreak >nul & \"{}\" start", exe_str)])
                                                 .stdin(std::process::Stdio::null())
                                                 .stdout(std::process::Stdio::null())
                                                 .stderr(std::process::Stdio::null())
