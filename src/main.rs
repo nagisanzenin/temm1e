@@ -1915,6 +1915,7 @@ async fn main() -> Result<()> {
                     .with_shared_memory_strategy(shared_memory_strategy.clone());
                     // Tem Conscious: enable consciousness if configured
                     if config.consciousness.enabled {
+                        let budget = runtime.budget_arc();
                         let aware_config = temm1e_agent::consciousness::ConsciousnessConfig {
                             enabled: true,
                             confidence_threshold: config.consciousness.confidence_threshold,
@@ -1928,8 +1929,32 @@ async fn main() -> Result<()> {
                                 aware_config,
                                 provider.clone(),
                                 model.clone(),
+                                budget,
                             ),
                         );
+                    }
+                    // ── X-Mind: init multi-faculty cognitive architecture ──
+                    if config.x_minds.enabled {
+                        let budget = runtime.budget_arc();
+                        let x_minds_cfg = temm1e_agent::x_mind::XMindsConfig {
+                            enabled: true,
+                            token_budget: config.x_minds.token_budget,
+                            mind_timeout_secs: config.x_minds.mind_timeout_secs,
+                            architect_enabled: config.x_minds.architect_enabled,
+                            analyst_enabled: config.x_minds.analyst_enabled,
+                            sentinel_enabled: config.x_minds.sentinel_enabled,
+                            artifact_dir: config.x_minds.artifact_dir.clone(),
+                        };
+                        let orchestrator = temm1e_agent::x_mind_engine::XMindOrchestrator::new(
+                            x_minds_cfg,
+                            provider.clone(),
+                            model.clone(),
+                            budget,
+                        )
+                        .await
+                        .with_tools(&tools);
+                        runtime = runtime.with_x_minds(std::sync::Arc::new(orchestrator));
+                        tracing::info!("X-Mind v2 architecture enabled");
                     }
                     // Wire Perpetuum temporal context into agent
                     runtime = runtime.with_perpetuum_temporal(perpetuum_temporal.clone());
@@ -4811,13 +4836,39 @@ Just type a message to chat with the AI agent.",
                                             .observation_mode
                                             .clone(),
                                     };
+                                let budget = rt.budget_arc();
                                 rt = rt.with_consciousness(
                                     temm1e_agent::consciousness_engine::ConsciousnessEngine::new(
                                         consciousness_cfg,
                                         consciousness_provider.clone(),
                                         model.clone(),
+                                        budget,
                                     ),
                                 );
+                            }
+                            // ── X-Mind: init for CLI chat ──────────
+                            if config.x_minds.enabled {
+                                let budget = rt.budget_arc();
+                                let x_minds_cfg = temm1e_agent::x_mind::XMindsConfig {
+                                    enabled: true,
+                                    token_budget: config.x_minds.token_budget,
+                                    mind_timeout_secs: config.x_minds.mind_timeout_secs,
+                                    architect_enabled: config.x_minds.architect_enabled,
+                                    analyst_enabled: config.x_minds.analyst_enabled,
+                                    sentinel_enabled: config.x_minds.sentinel_enabled,
+                                    artifact_dir: config.x_minds.artifact_dir.clone(),
+                                };
+                                let orchestrator =
+                                    temm1e_agent::x_mind_engine::XMindOrchestrator::new(
+                                        x_minds_cfg,
+                                        consciousness_provider.clone(),
+                                        model.clone(),
+                                        budget,
+                                    )
+                                    .await
+                                    .with_tools(&tools_template);
+                                rt = rt.with_x_minds(std::sync::Arc::new(orchestrator));
+                                tracing::info!("X-Mind v2 enabled for CLI chat");
                             }
                             // ── Perpetuum: init for CLI chat ──────────
                             let cli_perpetuum_temporal: Arc<tokio::sync::RwLock<String>> =
@@ -4901,6 +4952,7 @@ Just type a message to chat with the AI agent.",
                                         .with_shared_memory_strategy(shared_memory_strategy.clone())
                                         .with_perpetuum_temporal(cli_perpetuum_temporal.clone());
                                         if config.consciousness.enabled {
+                                            let budget = rt2.budget_arc();
                                             rt2 = rt2.with_consciousness(
                                                 temm1e_agent::consciousness_engine::ConsciousnessEngine::new(
                                                     temm1e_agent::consciousness::ConsciousnessConfig {
@@ -4911,8 +4963,29 @@ Just type a message to chat with the AI agent.",
                                                     },
                                                     consciousness_provider.clone(),
                                                     model.clone(),
+                                                    budget,
                                                 ),
                                             );
+                                        }
+                                        if config.x_minds.enabled {
+                                            let budget = rt2.budget_arc();
+                                            let x_minds_cfg = temm1e_agent::x_mind::XMindsConfig {
+                                                enabled: true,
+                                                token_budget: config.x_minds.token_budget,
+                                                mind_timeout_secs: config.x_minds.mind_timeout_secs,
+                                                architect_enabled: config.x_minds.architect_enabled,
+                                                analyst_enabled: config.x_minds.analyst_enabled,
+                                                sentinel_enabled: config.x_minds.sentinel_enabled,
+                                                artifact_dir: config.x_minds.artifact_dir.clone(),
+                                            };
+                                            let orchestrator = temm1e_agent::x_mind_engine::XMindOrchestrator::new(
+                                                x_minds_cfg,
+                                                consciousness_provider.clone(),
+                                                model.clone(),
+                                                budget,
+                                            ).await.with_tools(&tools_template);
+                                            rt2 =
+                                                rt2.with_x_minds(std::sync::Arc::new(orchestrator));
                                         }
                                         rt = rt2;
                                         p.start();

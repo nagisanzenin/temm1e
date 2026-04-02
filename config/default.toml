@@ -56,6 +56,17 @@ http = true
 log_level = "info"
 otel_enabled = false
 
+# X-Mind — Multi-faculty cognitive architecture.
+# Extends consciousness with specialized concurrent minds (Architect, Analyst, Sentinel).
+# OFF by default. Enable to run multiple cognitive faculties concurrently.
+[x_minds]
+enabled = false
+token_budget = 500           # Max total tokens for all mind injections combined
+mind_timeout_secs = 10       # Per-mind LLM call timeout
+architect_enabled = true     # Architecture observer mind
+analyst_enabled = true       # Logical analysis mind
+sentinel_enabled = true      # Safety/security monitor mind
+
 # Telegram channel — set your bot token here or via TELEGRAM_BOT_TOKEN env var
 [channel.telegram]
 enabled = true

@@ -69,8 +69,8 @@ pub struct AgentRuntime {
     max_consecutive_failures: usize,
     /// Optional persistent task queue for checkpointing (None = no persistence).
     task_queue: Option<Arc<TaskQueue>>,
-    /// Per-session budget tracker.
-    budget: BudgetTracker,
+    /// Per-session budget tracker (Arc for sharing with consciousness/x_mind).
+    budget: Arc<BudgetTracker>,
     /// Pricing for the current model.
     model_pricing: ModelPricing,
     /// Whether v2 Tem's Mind optimizations are enabled.
@@ -98,6 +98,9 @@ pub struct AgentRuntime {
     /// Perpetuum temporal context injection string. Updated externally before each call.
     /// When set, prepended to the system prompt for time awareness.
     perpetuum_temporal: Option<Arc<RwLock<String>>>,
+    /// X-Mind orchestrator — multi-faculty cognitive architecture.
+    /// Runs specialized minds concurrently and injects their artifacts.
+    x_mind_orchestrator: Option<Arc<crate::x_mind_engine::XMindOrchestrator>>,
 }
 
 impl AgentRuntime {
@@ -124,7 +127,7 @@ impl AgentRuntime {
             verification_enabled: true,
             max_consecutive_failures: 2,
             task_queue: None,
-            budget: BudgetTracker::new(0.0),
+            budget: Arc::new(BudgetTracker::new(0.0)),
             hive_enabled: false,
             model_pricing,
             v2_optimizations: true,
@@ -133,6 +136,7 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            x_mind_orchestrator: None,
         }
     }
 
@@ -193,7 +197,7 @@ impl AgentRuntime {
             verification_enabled: true,
             max_consecutive_failures: 2,
             task_queue: None,
-            budget: BudgetTracker::new(max_spend_usd),
+            budget: Arc::new(BudgetTracker::new(max_spend_usd)),
             hive_enabled: false,
             model_pricing,
             v2_optimizations: true,
@@ -202,6 +206,7 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            x_mind_orchestrator: None,
         }
     }
 
@@ -227,12 +232,27 @@ impl AgentRuntime {
         self
     }
 
+    /// Get a shared reference to the budget tracker.
+    /// Used to share budget tracking with consciousness and X-Mind subsystems.
+    pub fn budget_arc(&self) -> Arc<BudgetTracker> {
+        self.budget.clone()
+    }
+
     /// Enable Tem Conscious consciousness observer.
     pub fn with_consciousness(
         mut self,
         engine: crate::consciousness_engine::ConsciousnessEngine,
     ) -> Self {
         self.consciousness = Some(engine);
+        self
+    }
+
+    /// Enable X-Mind multi-faculty cognitive architecture.
+    pub fn with_x_minds(
+        mut self,
+        orchestrator: Arc<crate::x_mind_engine::XMindOrchestrator>,
+    ) -> Self {
+        self.x_mind_orchestrator = Some(orchestrator);
         self
     }
 
@@ -566,6 +586,8 @@ impl AgentRuntime {
                                 consciousness_observer.post_observe(&obs).await;
                             }
 
+                            // ── X-Mind v2: post-update handled by consciousness (Phase 2) ──
+
                             return Ok((
                                 OutboundMessage {
                                     chat_id: msg.chat_id.clone(),
@@ -749,6 +771,18 @@ impl AgentRuntime {
         let mut prompted_json_retries: u8 = 0;
         const MAX_PROMPTED_JSON_RETRIES: u8 = 1;
 
+        // ── X-Mind v2: prune artifacts at start of each user message ──
+        if let Some(ref x_mind) = self.x_mind_orchestrator {
+            x_mind.prune().await;
+        }
+        // X-Mind v2: consciousness orchestrates artifact injection and mind invocation
+        // inside the tool loop (Phase 2). For now, no pre-loop X-Mind calls.
+
+        // Track tool loop state for consciousness
+        let mut last_round_tools: Vec<String> = Vec::new();
+        let mut last_round_results: Vec<String> = Vec::new();
+        let mut last_round_agent_text = String::new();
+
         // Tool-use loop
         let task_start = Instant::now();
         let mut rounds: usize = 0;
@@ -839,9 +873,23 @@ impl AgentRuntime {
                 }
             }
 
-            // ── Tem Conscious: PRE-LLM consciousness (LLM-powered) ──────────
-            // A separate LLM call that THINKS about the upcoming turn.
+            // ── X-Mind v2: artifact injection handled by consciousness (Phase 2) ──
+            // Consciousness decides which artifacts to inject each round.
+
+            // ── Consciousness v2: LIVE per-round orchestration ──
+            // Consciousness sees the manifest, decides what to inject/invoke.
             if let Some(ref consciousness_observer) = self.consciousness {
+                // Build manifest for consciousness (Tier 1+2 only)
+                let (artifact_manifest, available_minds) =
+                    if let Some(ref x_mind) = self.x_mind_orchestrator {
+                        (
+                            x_mind.manifest_for_consciousness().await,
+                            x_mind.available_minds(),
+                        )
+                    } else {
+                        ("Available artifacts: none".to_string(), vec![])
+                    };
+
                 let pre_obs = crate::consciousness_engine::PreObservation {
                     user_message: user_text.clone(),
                     category: classification_label.clone(),
@@ -850,19 +898,57 @@ impl AgentRuntime {
                     session_id: session.session_id.clone(),
                     cumulative_cost_usd: self.budget.total_spend_usd(),
                     budget_limit_usd: self.budget.max_spend_usd(),
+                    tool_loop_round: rounds,
+                    last_tools_called: last_round_tools.clone(),
+                    last_tool_results: last_round_results.clone(),
+                    last_agent_text: last_round_agent_text.clone(),
+                    artifact_manifest,
+                    available_minds,
                 };
-                if let Some(injection) = consciousness_observer.pre_observe(&pre_obs).await {
-                    let consciousness_block = format!(
-                        "{{{{consciousness}}}}\n\
-                         [Your consciousness — a separate observer watching this conversation — shares this insight:]\n\
-                         {}\n\
-                         {{{{/consciousness}}}}",
-                        injection
-                    );
-                    request.system = Some(match request.system {
-                        Some(existing) => format!("{consciousness_block}\n\n{existing}"),
-                        None => consciousness_block,
-                    });
+
+                if let Some(decision) = consciousness_observer.pre_observe(&pre_obs).await {
+                    // 1. Execute artifact lifecycle actions
+                    if let Some(ref x_mind) = self.x_mind_orchestrator {
+                        if !decision.artifact_actions.is_empty() {
+                            x_mind.execute_actions(&decision.artifact_actions).await;
+                        }
+
+                        // 2. Invoke X-Mind subagents (synchronous — wait for completion)
+                        if !decision.invoke_minds.is_empty() {
+                            x_mind.invoke_minds(&decision.invoke_minds).await;
+                        }
+
+                        // 3. Inject selected artifacts into the system prompt
+                        if !decision.inject_artifacts.is_empty() {
+                            let artifact_block =
+                                x_mind.build_injection(&decision.inject_artifacts).await;
+                            if !artifact_block.is_empty() {
+                                request.system = Some(match request.system {
+                                    Some(existing) => {
+                                        format!("{artifact_block}\n\n{existing}")
+                                    }
+                                    None => artifact_block,
+                                });
+                            }
+                        }
+                    }
+
+                    // 4. Inject consciousness thoughts
+                    if !decision.thoughts.is_empty() && decision.thoughts.to_lowercase() != "ok" {
+                        let consciousness_block = format!(
+                            "{{{{consciousness}}}}\n\
+                             [Your consciousness — the executive function orchestrating your cognitive faculties:]\n\
+                             {}\n\
+                             {{{{/consciousness}}}}",
+                            decision.thoughts
+                        );
+                        request.system = Some(match request.system {
+                            Some(existing) => {
+                                format!("{consciousness_block}\n\n{existing}")
+                            }
+                            None => consciousness_block,
+                        });
+                    }
                 }
             }
 
@@ -1394,6 +1480,8 @@ impl AgentRuntime {
                     consciousness_observer.post_observe(&obs).await;
                 }
 
+                // ── X-Mind v2: post-turn artifact updates handled by consciousness ──
+
                 // ── Status: Done ─────────────────────────────────
                 if let Some(ref tx) = status_tx {
                     tx.send_modify(|s| {
@@ -1691,6 +1779,29 @@ impl AgentRuntime {
                 if let Ok(checkpoint_json) = serde_json::to_string(&session.history) {
                     if let Err(e) = tq.checkpoint(tid, &checkpoint_json).await {
                         warn!(error = %e, "Failed to checkpoint task — continuing");
+                    }
+                }
+            }
+
+            // ── Update tool loop state for consciousness (next round sees this) ──
+            last_round_tools.clear();
+            last_round_results.clear();
+            for part in &response.content {
+                if let ContentPart::Text { text } = part {
+                    last_round_agent_text = crate::consciousness::safe_preview(text, 300);
+                }
+            }
+            // Collect tool names and results from this round
+            for (_, tool_name, _) in &tool_uses {
+                last_round_tools.push(tool_name.clone());
+            }
+            for part in session.history.last().iter() {
+                if let MessageContent::Parts(parts) = &part.content {
+                    for p in parts {
+                        if let ContentPart::ToolResult { content, .. } = p {
+                            last_round_results
+                                .push(crate::consciousness::safe_preview(content, 200));
+                        }
                     }
                 }
             }

@@ -70,6 +70,8 @@ pub struct Temm1eConfig {
     pub consciousness: ConsciousnessConfig,
     #[serde(default)]
     pub perpetuum: PerpetualConfig,
+    #[serde(default)]
+    pub x_minds: XMindsConfig,
 }
 
 /// Perpetuum configuration — perpetual time-aware entity framework.
@@ -164,6 +166,54 @@ fn default_consciousness_max_interventions() -> u32 {
 }
 fn default_consciousness_observation_mode() -> String {
     "rules_first".into()
+}
+
+/// X-Mind configuration — multi-faculty cognitive architecture.
+/// Extends consciousness with specialized concurrent minds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XMindsConfig {
+    /// Master switch. OFF by default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum total tokens for all X-Mind injections combined.
+    #[serde(default = "default_x_minds_token_budget")]
+    pub token_budget: usize,
+    /// Per-mind timeout in seconds.
+    #[serde(default = "default_x_minds_timeout")]
+    pub mind_timeout_secs: u64,
+    /// Architect mind enabled.
+    #[serde(default = "default_true")]
+    pub architect_enabled: bool,
+    /// Analyst mind enabled.
+    #[serde(default = "default_true")]
+    pub analyst_enabled: bool,
+    /// Sentinel mind enabled.
+    #[serde(default = "default_true")]
+    pub sentinel_enabled: bool,
+    /// Path for artifact persistence.
+    #[serde(default)]
+    pub artifact_dir: Option<String>,
+}
+
+impl Default for XMindsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token_budget: default_x_minds_token_budget(),
+            mind_timeout_secs: default_x_minds_timeout(),
+            architect_enabled: true,
+            analyst_enabled: true,
+            sentinel_enabled: true,
+            artifact_dir: None,
+        }
+    }
+}
+
+fn default_x_minds_token_budget() -> usize {
+    500
+}
+fn default_x_minds_timeout() -> u64 {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -983,6 +1033,7 @@ mod tests {
             gaze: GazeConfig::default(),
             consciousness: ConsciousnessConfig::default(),
             perpetuum: PerpetualConfig::default(),
+            x_minds: XMindsConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();

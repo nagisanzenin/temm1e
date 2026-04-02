@@ -6914,6 +6914,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "dirs",
  "futures",
  "hex",
  "serde",
