@@ -23,6 +23,7 @@ chrono.workspace = true
 dirs.workspace = true
 zeroize.workspace = true
 regex.workspace = true
+temm1e-anima.workspace = true
 
 # Optional: Browser automation
 chromiumoxide = { workspace = true, optional = true }

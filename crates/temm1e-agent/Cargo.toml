@@ -22,6 +22,7 @@ tokio-util.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
 hex.workspace = true
+temm1e-anima.workspace = true
 
 [dev-dependencies]
 temm1e-test-utils.workspace = true

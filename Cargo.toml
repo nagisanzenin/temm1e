@@ -22,10 +22,11 @@ members = [
     "crates/temm1e-distill",
     "crates/temm1e-gaze",
     "crates/temm1e-perpetuum",
+    "crates/temm1e-anima",
 ]
 
 [workspace.package]
-version = "4.2.0"
+version = "4.3.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/nagisanzenin/temm1e"
@@ -139,6 +140,7 @@ temm1e-hive = { path = "crates/temm1e-hive" }
 temm1e-distill = { path = "crates/temm1e-distill" }
 temm1e-gaze = { path = "crates/temm1e-gaze" }
 temm1e-perpetuum = { path = "crates/temm1e-perpetuum" }
+temm1e-anima = { path = "crates/temm1e-anima" }
 
 [package]
 name = "temm1e"
@@ -171,6 +173,7 @@ temm1e-tui = { workspace = true, optional = true }
 temm1e-gaze = { workspace = true, optional = true }
 temm1e-hive.workspace = true
 temm1e-perpetuum.workspace = true
+temm1e-anima.workspace = true
 tokio.workspace = true
 clap.workspace = true
 dirs.workspace = true

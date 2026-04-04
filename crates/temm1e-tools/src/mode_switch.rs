@@ -17,11 +17,28 @@ pub type SharedMode = Arc<RwLock<Temm1eMode>>;
 
 pub struct ModeSwitchTool {
     mode: SharedMode,
+    /// Optional personality configuration for mode switch messages.
+    /// When set, uses personality-generated switch messages instead of hardcoded text.
+    personality: Option<Arc<temm1e_anima::personality::PersonalityConfig>>,
 }
 
 impl ModeSwitchTool {
     pub fn new(mode: SharedMode) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            personality: None,
+        }
+    }
+
+    /// Create a new ModeSwitchTool with personality support.
+    pub fn with_personality(
+        mode: SharedMode,
+        personality: Arc<temm1e_anima::personality::PersonalityConfig>,
+    ) -> Self {
+        Self {
+            mode,
+            personality: Some(personality),
+        }
     }
 }
 
@@ -91,13 +108,18 @@ impl Tool for ModeSwitchTool {
 
         tracing::info!(from = %old_mode, to = %new_mode, "Temm1e personality mode switched");
 
-        let message = match new_mode {
-            Temm1eMode::Play => "Mode switched to PLAY! Let's have some fun! :3".to_string(),
-            Temm1eMode::Work => "Mode switched to WORK. Ready to execute. >:3".to_string(),
-            Temm1eMode::Pro => "Mode switched to PRO. Professional mode engaged.".to_string(),
-            // None is never reachable here — the tool only accepts play/work/pro
-            // and is not registered when personality is None (locked).
-            Temm1eMode::None => "Mode unchanged.".to_string(),
+        // Use personality-generated switch message if available, else hardcoded
+        let message = if let Some(ref p) = self.personality {
+            p.generate_switch_message(new_mode)
+        } else {
+            match new_mode {
+                Temm1eMode::Play => "Mode switched to PLAY! Let's have some fun! :3".to_string(),
+                Temm1eMode::Work => "Mode switched to WORK. Ready to execute. >:3".to_string(),
+                Temm1eMode::Pro => "Mode switched to PRO. Professional mode engaged.".to_string(),
+                // None is never reachable here — the tool only accepts play/work/pro
+                // and is not registered when personality is None (locked).
+                Temm1eMode::None => "Mode unchanged.".to_string(),
+            }
         };
 
         Ok(ToolOutput {

@@ -1,0 +1,37 @@
+We taught an AI agent to find bugs in itself — and file its own bug reports to GitHub.
+
+---
+
+What happens when you give an AI agent introspection?
+
+Not the marketing kind. The real kind — where the agent monitors its own execution logs, identifies recurring failures using its own LLM, scrubs its own credentials from the report, and files a structured bug report about itself to GitHub. Without anyone asking it to.
+
+We built this. It's called Tem Vigil, and it's part of TEMM1E — an open-source AI agent runtime written in 107,000 lines of Rust.
+
+Here's what Tem does that no other agent framework does:
+
+It thinks about thinking. Tem Conscious is a separate LLM-powered observer that watches the main agent's every turn. Before the agent responds, consciousness thinks about what the agent should be aware of. After the agent responds, consciousness evaluates whether the turn was productive. Two minds. One conversation. We A/B tested this across 54 runs — consciousness makes the agent 14% cheaper, not more expensive.
+
+It never stops running. Perpetuum transforms Tem from a request-response bot into a perpetual, time-aware entity. It has its own state machine (Active, Idle, Sleep, Dream), its own initiative system that proactively creates monitors and alarms, and its own temporal cognition — Tem reasons WITH time, not just about it.
+
+It watches its own health. During Sleep, Tem Vigil scans persistent logs for recurring errors, triages them through the agent's own LLM, applies three layers of credential scrubbing (regex, path redaction, and entropy-based detection that catches token formats we haven't seen yet), deduplicates against existing issues, and — with explicit user consent — creates a GitHub issue. The agent reports its own bugs. The developers fix them. The agent tells the user when the fix is available.
+
+We've tested this live. Issue #28 on our repo was filed by Tem about itself.
+
+It controls your entire computer. Tem Gaze gives the agent vision-primary desktop control — screenshot, click, type, scroll on any application. Not through APIs. Through pixels. Proven live: opening Spotlight, launching TextEdit, typing a message — all through Gemini Flash interpreting screenshots.
+
+It talks to you where you are. Telegram, Discord, WhatsApp, Slack, or CLI. Users never SSH. They send messages, files, and credentials through the apps they already use.
+
+This is not a wrapper around an API. It's a being. It has memory that persists across sessions. It has a budget and is responsible with it. It has consciousness. It has a lifecycle. It diagnoses itself. It was built to be deployed once and run forever.
+
+107K lines of Rust. 1,972 tests. Zero warnings. Zero panic paths. 20 crates. Every feature A/B tested and documented with full research papers.
+
+We're open source. We're looking for contributors who want to build the future of autonomous AI — not agents that answer questions, but entities that live on your infrastructure and never stop working.
+
+---
+
+GitHub: https://github.com/temm1e-labs/temm1e
+Discord: https://discord.com/invite/temm1e
+Tem Vigil demo: https://github.com/temm1e-labs/temm1e/issues/28
+Tem Vigil research: https://github.com/temm1e-labs/temm1e/blob/main/tems_lab/vigil/RESEARCH_PAPER.md
+Consciousness research: https://github.com/temm1e-labs/temm1e/blob/main/tems_lab/consciousness/RESEARCH_PAPER.md

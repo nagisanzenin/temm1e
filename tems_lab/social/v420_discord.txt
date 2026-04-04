@@ -1,0 +1,17 @@
+hey everyone! v4.2.0 just dropped
+
+Tem can now find bugs in itself and file GitHub issues about them. no joke.
+
+it's called Tem Vigil — during idle time, Tem scans its own logs, uses its LLM to figure out if something is a real bug, scrubs all credentials out, and creates a GitHub issue. you just approve it.
+
+set it up in 2 commands:
+/addkey github — paste a PAT
+/vigil auto — done
+
+first real issue filed by Tem: https://github.com/temm1e-labs/temm1e/issues/28
+
+also in this release:
+- persistent log file at ~/.temm1e/logs/ (finally — no more lost logs)
+- consciousness budget fix (turns out consciousness was 14% cheaper this whole time, we just weren't counting it right lol)
+
+full changelog in the repo. let me know if you run into anything — or better yet, let Tem tell me itself :3

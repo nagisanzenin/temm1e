@@ -72,6 +72,46 @@ pub struct Temm1eConfig {
     pub perpetuum: PerpetualConfig,
     #[serde(default)]
     pub vigil: VigilConfig,
+    #[serde(default)]
+    pub social: SocialConfig,
+}
+
+/// Social intelligence configuration — user profiling and emotional intelligence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocialConfig {
+    /// Enable social intelligence system
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Evaluate user profile every N turns
+    #[serde(default = "default_social_turn_interval")]
+    pub turn_interval: u32,
+    /// Minimum seconds between evaluations
+    #[serde(default = "default_social_min_interval")]
+    pub min_interval_seconds: u64,
+    /// Maximum turns to buffer before forcing evaluation
+    #[serde(default = "default_social_max_buffer")]
+    pub max_buffer_turns: u32,
+}
+
+fn default_social_turn_interval() -> u32 {
+    5
+}
+fn default_social_min_interval() -> u64 {
+    120
+}
+fn default_social_max_buffer() -> u32 {
+    30
+}
+
+impl Default for SocialConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            turn_interval: default_social_turn_interval(),
+            min_interval_seconds: default_social_min_interval(),
+            max_buffer_turns: default_social_max_buffer(),
+        }
+    }
 }
 
 /// Perpetuum configuration — perpetual time-aware entity framework.
@@ -1010,6 +1050,7 @@ mod tests {
             consciousness: ConsciousnessConfig::default(),
             perpetuum: PerpetualConfig::default(),
             vigil: VigilConfig::default(),
+            social: SocialConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();

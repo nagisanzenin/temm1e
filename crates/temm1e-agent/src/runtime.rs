@@ -2,7 +2,7 @@
 //! provider, executing tool calls in a loop until a final text reply.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,10 @@ use crate::learning;
 use crate::prompted_tool_calling::{self, PromptedToolResult};
 use crate::self_correction::FailureTracker;
 use crate::task_queue::TaskQueue;
+
+// Social intelligence
+use temm1e_anima::personality::PersonalityConfig;
+use temm1e_anima::SocialStorage;
 
 /// Shared runtime mode handle (same type used by mode_switch tool).
 pub type SharedMode = Arc<RwLock<Temm1eMode>>;
@@ -98,6 +102,18 @@ pub struct AgentRuntime {
     /// Perpetuum temporal context injection string. Updated externally before each call.
     /// When set, prepended to the system prompt for time awareness.
     perpetuum_temporal: Option<Arc<RwLock<String>>>,
+    /// Social intelligence: personality configuration loaded from personality.toml.
+    /// When Some, replaces hardcoded personality text in system prompts and classifier.
+    personality: Option<Arc<PersonalityConfig>>,
+    /// Social intelligence: persistent user profile storage.
+    /// When Some, enables user profiling, fact collection, and background evaluation.
+    social_storage: Option<Arc<SocialStorage>>,
+    /// Social intelligence: configuration from [social] TOML section.
+    social_config: Option<temm1e_core::types::config::SocialConfig>,
+    /// Social intelligence: per-session turn counter for evaluation scheduling.
+    social_turn_count: Arc<AtomicU32>,
+    /// Social intelligence: concurrent evaluation guard to prevent overlapping evals.
+    social_evaluating: Arc<AtomicBool>,
 }
 
 impl AgentRuntime {
@@ -133,6 +149,11 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            personality: None,
+            social_storage: None,
+            social_config: None,
+            social_turn_count: Arc::new(AtomicU32::new(0)),
+            social_evaluating: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -202,6 +223,11 @@ impl AgentRuntime {
             shared_memory_strategy: None,
             consciousness: None,
             perpetuum_temporal: None,
+            personality: None,
+            social_storage: None,
+            social_config: None,
+            social_turn_count: Arc::new(AtomicU32::new(0)),
+            social_evaluating: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -275,6 +301,25 @@ impl AgentRuntime {
     /// The Arc<RwLock<String>> is updated externally by Perpetuum before each message.
     pub fn with_perpetuum_temporal(mut self, temporal: Arc<RwLock<String>>) -> Self {
         self.perpetuum_temporal = Some(temporal);
+        self
+    }
+
+    /// Set the personality configuration for social intelligence.
+    /// When set, replaces hardcoded personality text in system prompts and classifier.
+    pub fn with_personality(mut self, p: Arc<PersonalityConfig>) -> Self {
+        self.personality = Some(p);
+        self
+    }
+
+    /// Set the social intelligence storage and configuration.
+    /// When storage is Some, enables user profiling, fact collection, and background evaluation.
+    pub fn with_social(
+        mut self,
+        storage: Option<Arc<SocialStorage>>,
+        config: Option<temm1e_core::types::config::SocialConfig>,
+    ) -> Self {
+        self.social_storage = storage;
+        self.social_config = config;
         self
     }
 
@@ -463,6 +508,44 @@ impl AgentRuntime {
             });
         }
 
+        // ── Social intelligence: collect raw facts ───────────────────
+        if let (Some(storage), Some(config)) = (&self.social_storage, &self.social_config) {
+            if config.enabled {
+                let msg_facts = temm1e_anima::facts::collect_message_facts(&user_text);
+                let interaction = temm1e_anima::facts::collect_interaction_facts(
+                    0, // seconds_since_last — not yet tracked
+                    session.history.len() as u32,
+                    false,
+                    false,
+                    0,
+                );
+                let turn_facts = temm1e_anima::TurnFacts {
+                    turn_number: session.history.len() as u32,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    user_message: msg_facts,
+                    tem_response: temm1e_anima::facts::collect_message_facts(""),
+                    interaction,
+                };
+                let social_user_id = msg.user_id.clone();
+                let social_storage = storage.clone();
+                let turn = turn_facts.turn_number;
+                let facts_clone = turn_facts.clone();
+                let text_clone = user_text.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = social_storage
+                        .buffer_facts(&social_user_id, turn, &facts_clone, &text_clone)
+                        .await
+                    {
+                        tracing::debug!(error = %e, "Failed to buffer social facts");
+                    }
+                });
+                self.social_turn_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         // ── Status: Classifying ──────────────────────────────────
         if let Some(ref tx) = status_tx {
             tx.send_modify(|s| {
@@ -488,6 +571,25 @@ impl AgentRuntime {
                 Some(m) => *m.read().await,
                 None => Temm1eMode::Play,
             };
+
+            // Social intelligence: load profile summary for classifier context
+            let profile_summary = if let (Some(storage), Some(config)) =
+                (&self.social_storage, &self.social_config)
+            {
+                if config.enabled {
+                    match storage.get_profile(&msg.user_id).await {
+                        Ok(Some(profile)) => Some(
+                            temm1e_anima::communication::classifier_profile_summary(&profile),
+                        ),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             match crate::llm_classifier::classify_message(
                 self.provider.as_ref(),
                 &self.model,
@@ -495,6 +597,8 @@ impl AgentRuntime {
                 &session.history,
                 &blueprint_categories,
                 current_mode,
+                self.personality.as_deref(),
+                profile_summary.as_deref(),
             )
             .await
             {
@@ -539,6 +643,81 @@ impl AgentRuntime {
                             // Chat turns skip consciousness — the response is
                             // already generated by the classifier and consciousness
                             // observation here produces no actionable insight.
+
+                            // Social intelligence: trigger evaluation on Chat path too
+                            if let (Some(storage), Some(social_config)) =
+                                (&self.social_storage, &self.social_config)
+                            {
+                                if social_config.enabled
+                                    && !self.social_evaluating.load(Ordering::Relaxed)
+                                {
+                                    let turn_count = self.social_turn_count.load(Ordering::Relaxed);
+                                    let profile_data =
+                                        storage.get_profile(&msg.user_id).await.ok().flatten();
+                                    let last_eval = profile_data
+                                        .as_ref()
+                                        .map(|p| p.last_evaluated_at)
+                                        .unwrap_or(0);
+                                    let effective_n = profile_data
+                                        .as_ref()
+                                        .map(|p| {
+                                            if p.n_next > 0 {
+                                                p.n_next
+                                            } else {
+                                                social_config.turn_interval
+                                            }
+                                        })
+                                        .unwrap_or(social_config.turn_interval);
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    if temm1e_anima::user_model::should_evaluate_raw(
+                                        turn_count,
+                                        last_eval,
+                                        now,
+                                        effective_n,
+                                        social_config.min_interval_seconds,
+                                    ) {
+                                        let storage = storage.clone();
+                                        let provider = self.provider.clone();
+                                        let model = self.model.clone();
+                                        let user_id = msg.user_id.clone();
+                                        let personality_name = self
+                                            .personality
+                                            .as_ref()
+                                            .map(|p| p.identity.name.clone())
+                                            .unwrap_or_else(|| "Tem".to_string());
+                                        let evaluating = self.social_evaluating.clone();
+                                        evaluating.store(true, Ordering::Relaxed);
+                                        tokio::spawn(async move {
+                                            let result = tokio::time::timeout(
+                                                std::time::Duration::from_secs(30),
+                                                run_social_evaluation(
+                                                    &storage,
+                                                    provider.as_ref(),
+                                                    &model,
+                                                    &user_id,
+                                                    &personality_name,
+                                                ),
+                                            )
+                                            .await;
+                                            evaluating.store(false, Ordering::Relaxed);
+                                            match result {
+                                                Ok(Ok(())) => {}
+                                                Ok(Err(e)) => tracing::debug!(
+                                                    error = %e,
+                                                    "Social evaluation failed (chat path)"
+                                                ),
+                                                Err(_) => tracing::warn!(
+                                                    "Social evaluation timed out after 30s (chat path)"
+                                                ),
+                                            }
+                                        });
+                                        self.social_turn_count.store(0, Ordering::Relaxed);
+                                    }
+                                }
+                            }
 
                             return Ok((
                                 OutboundMessage {
@@ -795,11 +974,34 @@ impl AgentRuntime {
             // ── Personality mode injection ──────────────────────────────
             if let Some(ref shared_mode) = self.shared_mode {
                 let mode = *shared_mode.read().await;
-                let mode_block = mode_prompt_block(mode);
+                // Use personality config if available, otherwise fall back to hardcoded
+                let mode_block = if let Some(ref p) = self.personality {
+                    p.generate_runtime_mode_block(mode)
+                } else {
+                    mode_prompt_block(mode)
+                };
                 request.system = Some(match request.system {
                     Some(existing) => format!("{mode_block}\n\n{existing}"),
                     None => mode_block,
                 });
+            }
+
+            // ── Social intelligence: inject user profile into system prompt ──
+            if let (Some(storage), Some(config)) = (&self.social_storage, &self.social_config) {
+                if config.enabled {
+                    if let Ok(Some(profile)) = storage.get_profile(&msg.user_id).await {
+                        let profile_section =
+                            temm1e_anima::communication::section_user_profile(&profile);
+                        if !profile_section.is_empty() {
+                            request.system = Some(match request.system {
+                                Some(existing) => {
+                                    format!("{existing}\n\n{profile_section}")
+                                }
+                                None => profile_section,
+                            });
+                        }
+                    }
+                }
             }
 
             // ── Perpetuum: temporal context injection ─────────────────────
@@ -1382,6 +1584,77 @@ impl AgentRuntime {
                         turn_cost_usd += cu.cost_usd;
                         self.budget
                             .record_usage(cu.input_tokens, cu.output_tokens, cu.cost_usd);
+                    }
+                }
+
+                // ── Social intelligence: trigger background evaluation ─────
+                if let (Some(storage), Some(social_config)) =
+                    (&self.social_storage, &self.social_config)
+                {
+                    if social_config.enabled && !self.social_evaluating.load(Ordering::Relaxed) {
+                        let turn_count = self.social_turn_count.load(Ordering::Relaxed);
+                        let profile_data = storage.get_profile(&msg.user_id).await.ok().flatten();
+                        let last_eval = profile_data
+                            .as_ref()
+                            .map(|p| p.last_evaluated_at)
+                            .unwrap_or(0);
+                        let effective_n = profile_data
+                            .as_ref()
+                            .map(|p| {
+                                if p.n_next > 0 {
+                                    p.n_next
+                                } else {
+                                    social_config.turn_interval
+                                }
+                            })
+                            .unwrap_or(social_config.turn_interval);
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        if temm1e_anima::user_model::should_evaluate_raw(
+                            turn_count,
+                            last_eval,
+                            now,
+                            effective_n,
+                            social_config.min_interval_seconds,
+                        ) {
+                            let eval_storage = storage.clone();
+                            let eval_provider = self.provider.clone();
+                            let eval_model = self.model.clone();
+                            let eval_user_id = msg.user_id.clone();
+                            let personality_name = self
+                                .personality
+                                .as_ref()
+                                .map(|p| p.identity.name.clone())
+                                .unwrap_or_else(|| "Tem".to_string());
+                            let evaluating = self.social_evaluating.clone();
+                            evaluating.store(true, Ordering::Relaxed);
+                            tokio::spawn(async move {
+                                let result = tokio::time::timeout(
+                                    std::time::Duration::from_secs(30),
+                                    run_social_evaluation(
+                                        &eval_storage,
+                                        eval_provider.as_ref(),
+                                        &eval_model,
+                                        &eval_user_id,
+                                        &personality_name,
+                                    ),
+                                )
+                                .await;
+                                evaluating.store(false, Ordering::Relaxed);
+                                match result {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(e)) => {
+                                        tracing::debug!(error = %e, "Social evaluation failed")
+                                    }
+                                    Err(_) => {
+                                        tracing::warn!("Social evaluation timed out after 30s")
+                                    }
+                                }
+                            });
+                            self.social_turn_count.store(0, Ordering::Relaxed);
+                        }
                     }
                 }
 
@@ -1984,6 +2257,71 @@ Voice rules:
 You are TEMM1E (or Tem), a fiercely helpful Agentic AI deployed on your client's personal computer with full access, trust and security.
 - Always respond in the same language the user writes in.".to_string(),
     }
+}
+
+/// Run social intelligence evaluation in background.
+/// Called every N turns to update user profile via an LLM evaluation pass.
+async fn run_social_evaluation(
+    storage: &SocialStorage,
+    provider: &dyn Provider,
+    model: &str,
+    user_id: &str,
+    personality_name: &str,
+) -> Result<(), Temm1eError> {
+    // 1. Read current profile
+    let mut profile = storage
+        .get_profile(user_id)
+        .await?
+        .unwrap_or_else(|| temm1e_anima::user_model::new_profile(user_id));
+
+    // 2. Read facts buffer
+    let facts = storage.get_buffered_facts(user_id).await?;
+    if facts.is_empty() {
+        return Ok(()); // Nothing to evaluate
+    }
+
+    // 3. Build evaluation prompt
+    let (system_prompt, user_prompt) =
+        temm1e_anima::evaluator::build_evaluation_prompt(&profile, &facts, personality_name);
+
+    // 4. Call LLM
+    let request = temm1e_core::types::message::CompletionRequest {
+        model: model.to_string(),
+        messages: vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(user_prompt),
+        }],
+        tools: Vec::new(),
+        temperature: Some(0.3),
+        max_tokens: None,
+        system: Some(system_prompt),
+    };
+    let response = provider.complete(request).await?;
+    let response_text = extract_text_from_response(&response.content);
+
+    // 5. Parse and apply
+    let eval = temm1e_anima::evaluator::parse_evaluation_output(&response_text)?;
+    temm1e_anima::evaluator::apply_evaluation(&mut profile, &eval);
+
+    // 6. Persist
+    storage.upsert_profile(&profile).await?;
+    let eval_json = serde_json::to_string(&eval).unwrap_or_default();
+    storage
+        .log_evaluation(user_id, &eval_json, model, response.usage.output_tokens)
+        .await?;
+    storage.clear_buffer(user_id).await?;
+
+    // 7. Store observations
+    for obs in &eval.observations {
+        storage.add_observation(user_id, obs).await?;
+    }
+
+    info!(
+        user_id = %user_id,
+        eval_count = profile.evaluation_count,
+        "Social evaluation complete"
+    );
+    Ok(())
 }
 
 /// Returns `true` for models known to accept image content parts,

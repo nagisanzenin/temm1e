@@ -146,16 +146,36 @@ CURRENT MODE: NONE
 /// When categories are available, the classifier picks from the grounded set
 /// (actual stored categories from memory). This enables zero-extra-LLM-call
 /// blueprint matching downstream.
-fn build_classify_prompt(available_categories: &[String], mode: Temm1eMode) -> String {
+///
+/// When `personality` is Some, uses it for mode injection instead of hardcoded constants.
+/// When `profile_summary` is Some, appends a short user context line to improve
+/// classifier accuracy (e.g., match user's communication preferences).
+fn build_classify_prompt(
+    available_categories: &[String],
+    mode: Temm1eMode,
+    personality: Option<&temm1e_anima::personality::PersonalityConfig>,
+    profile_summary: Option<&str>,
+) -> String {
     let mut prompt = CLASSIFY_BASE_PROMPT.to_string();
 
-    // Inject personality mode
-    prompt.push_str(match mode {
-        Temm1eMode::Play => CLASSIFY_MODE_PLAY,
-        Temm1eMode::Work => CLASSIFY_MODE_WORK,
-        Temm1eMode::Pro => CLASSIFY_MODE_PRO,
-        Temm1eMode::None => CLASSIFY_MODE_NONE,
-    });
+    // Inject personality mode — use personality config if available, else hardcoded
+    if let Some(p) = personality {
+        prompt.push_str(&p.generate_classifier_mode(mode));
+    } else {
+        prompt.push_str(match mode {
+            Temm1eMode::Play => CLASSIFY_MODE_PLAY,
+            Temm1eMode::Work => CLASSIFY_MODE_WORK,
+            Temm1eMode::Pro => CLASSIFY_MODE_PRO,
+            Temm1eMode::None => CLASSIFY_MODE_NONE,
+        });
+    }
+
+    // Inject user profile summary for classification context
+    if let Some(summary) = profile_summary {
+        if !summary.is_empty() {
+            prompt.push_str(&format!("\n\n{summary}"));
+        }
+    }
 
     if !available_categories.is_empty() {
         let cats_json = serde_json::to_string(available_categories).unwrap_or_default();
@@ -184,6 +204,7 @@ Blueprint hint (for "order" messages only):
 /// Returns the classification and the raw usage for budget tracking.
 /// Falls back with an error if the provider call or JSON parsing fails —
 /// the caller should use rule-based classification as fallback.
+#[allow(clippy::too_many_arguments)]
 pub async fn classify_message(
     provider: &dyn Provider,
     model: &str,
@@ -191,6 +212,8 @@ pub async fn classify_message(
     history: &[ChatMessage],
     available_blueprint_categories: &[String],
     mode: Temm1eMode,
+    personality: Option<&temm1e_anima::personality::PersonalityConfig>,
+    profile_summary: Option<&str>,
 ) -> Result<(MessageClassification, Usage), Temm1eError> {
     // Extract ONLY the current user message (the last one in history) for classification.
     // Previous history is reduced to 2 recent turns max for conversational context,
@@ -223,7 +246,12 @@ pub async fn classify_message(
         (&text_messages[..0], &text_messages[..])
     };
 
-    let system_prompt = build_classify_prompt(available_blueprint_categories, mode);
+    let system_prompt = build_classify_prompt(
+        available_blueprint_categories,
+        mode,
+        personality,
+        profile_summary,
+    );
 
     // Build classifier messages: context (small) + marker + current message + classify instruction
     let mut classify_messages: Vec<ChatMessage> = context.to_vec();
@@ -510,7 +538,7 @@ mod tests {
 
     #[test]
     fn build_prompt_without_categories() {
-        let prompt = build_classify_prompt(&[], Temm1eMode::Play);
+        let prompt = build_classify_prompt(&[], Temm1eMode::Play, None, None);
         assert!(prompt.contains("message classifier"));
         assert!(!prompt.contains("blueprint_hint"));
     }
@@ -518,10 +546,31 @@ mod tests {
     #[test]
     fn build_prompt_with_categories() {
         let categories = vec!["deployment".to_string(), "code-analysis".to_string()];
-        let prompt = build_classify_prompt(&categories, Temm1eMode::Play);
+        let prompt = build_classify_prompt(&categories, Temm1eMode::Play, None, None);
         assert!(prompt.contains("blueprint_hint"));
         assert!(prompt.contains("deployment"));
         assert!(prompt.contains("code-analysis"));
         assert!(prompt.contains("Never invent categories"));
+    }
+
+    #[test]
+    fn build_prompt_with_personality() {
+        let personality = temm1e_anima::personality::PersonalityConfig::stock_tem();
+        let prompt = build_classify_prompt(&[], Temm1eMode::Work, Some(&personality), None);
+        // Should use personality's classifier mode instead of hardcoded
+        assert!(prompt.contains("WORK"));
+        assert!(prompt.contains("message classifier"));
+    }
+
+    #[test]
+    fn build_prompt_with_profile_summary() {
+        let prompt = build_classify_prompt(
+            &[],
+            Temm1eMode::Play,
+            None,
+            Some("User: direct, technical | calibration phase"),
+        );
+        assert!(prompt.contains("direct, technical"));
+        assert!(prompt.contains("calibration phase"));
     }
 }

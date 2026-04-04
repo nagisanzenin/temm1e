@@ -66,6 +66,9 @@ pub struct SystemPromptBuilder<'a> {
     has_done_criteria: bool,
     config: Option<&'a AgentConfig>,
     prompt_tier: PromptTier,
+    /// Optional personality configuration for identity section override.
+    /// When set, uses personality-generated identity instead of hardcoded text.
+    personality: Option<&'a temm1e_anima::personality::PersonalityConfig>,
 }
 
 impl<'a> SystemPromptBuilder<'a> {
@@ -77,6 +80,7 @@ impl<'a> SystemPromptBuilder<'a> {
             has_done_criteria: false,
             config: None,
             prompt_tier: PromptTier::Standard,
+            personality: None,
         }
     }
 
@@ -110,6 +114,14 @@ impl<'a> SystemPromptBuilder<'a> {
     /// Set the prompt tier for token-optimized prompt construction.
     pub fn prompt_tier(mut self, tier: PromptTier) -> Self {
         self.prompt_tier = tier;
+        self
+    }
+
+    /// Set personality configuration for identity section override.
+    /// When set, the identity section uses personality-generated text
+    /// instead of the hardcoded Tem identity.
+    pub fn personality(mut self, p: &'a temm1e_anima::personality::PersonalityConfig) -> Self {
+        self.personality = Some(p);
         self
     }
 
@@ -219,6 +231,13 @@ impl<'a> SystemPromptBuilder<'a> {
     // -- Section builders ---------------------------------------------------
 
     fn section_identity(&self) -> PromptSection {
+        // Use personality config if available, otherwise fall back to hardcoded identity
+        if let Some(p) = self.personality {
+            return PromptSection {
+                name: "identity",
+                text: p.generate_identity_section(),
+            };
+        }
         PromptSection {
             name: "identity",
             text: concat!(
