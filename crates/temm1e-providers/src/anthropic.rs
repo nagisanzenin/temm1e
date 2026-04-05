@@ -136,6 +136,10 @@ enum AnthropicContentBlock {
         name: String,
         input: serde_json::Value,
     },
+    /// Catch-all for block types we don't handle (e.g. `thinking` from
+    /// Anthropic-compatible providers like MiniMax). Silently ignored.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +179,9 @@ enum AnthropicDelta {
     TextDelta { text: String },
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
+    /// Catch-all for delta types we don't handle (e.g. `thinking_delta`).
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,15 +275,19 @@ fn convert_tool_to_anthropic(tool: &ToolDefinition) -> serde_json::Value {
     })
 }
 
-fn convert_anthropic_content(block: &AnthropicContentBlock) -> ContentPart {
+fn convert_anthropic_content(block: &AnthropicContentBlock) -> Option<ContentPart> {
     match block {
-        AnthropicContentBlock::Text { text } => ContentPart::Text { text: text.clone() },
-        AnthropicContentBlock::ToolUse { id, name, input } => ContentPart::ToolUse {
+        AnthropicContentBlock::Text { text } => Some(ContentPart::Text { text: text.clone() }),
+        AnthropicContentBlock::ToolUse { id, name, input } => Some(ContentPart::ToolUse {
             id: id.clone(),
             name: name.clone(),
             input: input.clone(),
             thought_signature: None,
-        },
+        }),
+        AnthropicContentBlock::Unknown => {
+            tracing::debug!("Skipping unknown Anthropic content block type");
+            None
+        }
     }
 }
 
@@ -337,7 +348,7 @@ impl Provider for AnthropicProvider {
         let content = api_response
             .content
             .iter()
-            .map(convert_anthropic_content)
+            .filter_map(convert_anthropic_content)
             .collect();
 
         Ok(CompletionResponse {
@@ -509,6 +520,9 @@ fn extract_sse_event(
                         AnthropicContentBlock::Text { .. } => {
                             // Text block start, no content yet
                         }
+                        AnthropicContentBlock::Unknown => {
+                            tracing::debug!("Skipping unknown Anthropic content block type in SSE stream");
+                        }
                     }
                 }
                 continue;
@@ -536,6 +550,10 @@ fn extract_sse_event(
                                     _ => {}
                                 }
                             }
+                            continue;
+                        }
+                        AnthropicDelta::Unknown => {
+                            tracing::debug!("Skipping unknown Anthropic delta type in SSE stream");
                             continue;
                         }
                     }
@@ -795,5 +813,64 @@ mod tests {
         let provider = AnthropicProvider::new("key".to_string())
             .with_base_url("https://custom.api.com".to_string());
         assert_eq!(provider.base_url, "https://custom.api.com");
+    }
+
+    #[test]
+    fn deserialize_unknown_content_block() {
+        let json = r#"{"type": "thinking", "thinking": "some reasoning"}"#;
+        let block: AnthropicContentBlock = serde_json::from_str(json).unwrap();
+        assert!(matches!(block, AnthropicContentBlock::Unknown));
+    }
+
+    #[test]
+    fn mixed_response_yields_only_known_blocks() {
+        let json = r#"{
+            "id": "msg_test",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "thinking", "thinking": "reasoning about stuff"},
+                {"type": "text", "text": "World"}
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20}
+        }"#;
+        let response: AnthropicResponse = serde_json::from_str(json).unwrap();
+        let parts: Vec<ContentPart> = response
+            .content
+            .iter()
+            .filter_map(convert_anthropic_content)
+            .collect();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], ContentPart::Text { text } if text == "Hello"));
+        assert!(matches!(&parts[1], ContentPart::Text { text } if text == "World"));
+    }
+
+    #[test]
+    fn standard_anthropic_response_parses_unchanged() {
+        // Verify a typical Anthropic response (text + tool_use, no unknown blocks)
+        // still deserializes and converts correctly after adding #[serde(other)].
+        let json = r#"{
+            "id": "msg_abc123",
+            "content": [
+                {"type": "text", "text": "I'll look that up for you."},
+                {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "rust serde"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 50, "output_tokens": 30}
+        }"#;
+        let response: AnthropicResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.id, "msg_abc123");
+        assert_eq!(response.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(response.usage.input_tokens, 50);
+        assert_eq!(response.usage.output_tokens, 30);
+
+        let parts: Vec<ContentPart> = response
+            .content
+            .iter()
+            .filter_map(convert_anthropic_content)
+            .collect();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], ContentPart::Text { text } if text == "I'll look that up for you."));
+        assert!(matches!(&parts[1], ContentPart::ToolUse { id, name, .. } if id == "toolu_01" && name == "search"));
     }
 }
