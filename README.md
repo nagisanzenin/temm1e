@@ -526,7 +526,7 @@ Most AI agents are generalists — they do everything themselves, polluting thei
 
 **Autonomous invocation verified:** Gemini 3.1 Pro autonomously invokes cores when tasks warrant delegation (2/3 tasks delegated, 1/3 handled inline — correct judgment).
 
-[Research paper →](.claude/plans/bright-wiggling-shamir.md) · [Core definitions →](cores/)
+[Research paper →](tems_lab/temdos/TEMDOS_RESEARCH_PAPER.md) · [Core definitions →](cores/)
 
 ---
 
