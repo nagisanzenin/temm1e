@@ -11,17 +11,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use temm1e_core::types::error::Temm1eError;
-use temm1e_core::{Tool, ToolContext, ToolDeclarations, ToolInput, ToolOutput};
+use temm1e_core::{Memory, Tool, ToolContext, ToolDeclarations, ToolInput, ToolOutput};
 use temm1e_skills::SkillRegistry;
 use tokio::sync::RwLock;
 
 pub struct SkillTool {
     registry: Arc<RwLock<SkillRegistry>>,
+    memory: Option<Arc<dyn Memory>>,
 }
 
 impl SkillTool {
-    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self {
-        Self { registry }
+    pub fn new(registry: Arc<RwLock<SkillRegistry>>, memory: Option<Arc<dyn Memory>>) -> Self {
+        Self { registry, memory }
     }
 }
 
@@ -127,13 +128,19 @@ impl Tool for SkillTool {
 
                 let reg = self.registry.read().await;
                 match reg.get_skill(name) {
-                    Some(skill) => Ok(ToolOutput {
-                        content: format!(
-                            "=== SKILL: {} (v{}) ===\n{}\n\n{}\n=== END SKILL ===",
-                            skill.name, skill.version, skill.description, skill.instructions
-                        ),
-                        is_error: false,
-                    }),
+                    Some(skill) => {
+                        // Track skill usage (v4.6.0 self-learning)
+                        if let Some(ref mem) = self.memory {
+                            let _ = mem.record_skill_usage(&skill.name).await;
+                        }
+                        Ok(ToolOutput {
+                            content: format!(
+                                "=== SKILL: {} (v{}) ===\n{}\n\n{}\n=== END SKILL ===",
+                                skill.name, skill.version, skill.description, skill.instructions
+                            ),
+                            is_error: false,
+                        })
+                    }
                     None => skill_not_found(name, &reg),
                 }
             }
@@ -195,7 +202,7 @@ mod tests {
     async fn list_empty() {
         let tmp = tempdir().unwrap();
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(
@@ -226,7 +233,7 @@ mod tests {
         );
 
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(
@@ -262,7 +269,7 @@ mod tests {
         );
 
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(
@@ -298,7 +305,7 @@ mod tests {
         );
 
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(
@@ -321,7 +328,7 @@ mod tests {
     async fn invoke_missing_skill() {
         let tmp = tempdir().unwrap();
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(
@@ -342,7 +349,7 @@ mod tests {
     async fn invoke_missing_name_param() {
         let tmp = tempdir().unwrap();
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let result = tool
             .execute(
@@ -361,7 +368,7 @@ mod tests {
     async fn unknown_action() {
         let tmp = tempdir().unwrap();
         let reg = make_registry(tmp.path()).await;
-        let tool = SkillTool::new(reg);
+        let tool = SkillTool::new(reg, None);
 
         let out = tool
             .execute(

@@ -389,6 +389,35 @@ pub async fn build_context(
         }
     }
 
+    // ── Tool reliability injection (v4.6.0 self-learning) ──────────
+    if let Ok(records) = memory.get_tool_reliability().await {
+        let useful: Vec<_> = records
+            .iter()
+            .filter(|r| r.successes + r.failures >= 3) // skip low-sample
+            .collect();
+        if !useful.is_empty() {
+            let mut lines = vec!["Tool reliability (last 30 days):".to_string()];
+            for r in useful.iter().take(10) {
+                let total = r.successes + r.failures;
+                lines.push(format!(
+                    "  {}: {} {:.0}% (N={})",
+                    r.tool_name,
+                    r.task_type,
+                    r.success_rate() * 100.0,
+                    total
+                ));
+            }
+            let reliability_text = lines.join("\n");
+            let tokens = estimate_tokens(&reliability_text);
+            if tokens <= 100 {
+                lambda_messages.push(ChatMessage {
+                    role: Role::System,
+                    content: MessageContent::Text(reliability_text),
+                });
+            }
+        }
+    }
+
     // ── Category 7: Older conversation history ─────────────────────
     let used_tokens = fixed_tokens
         + recent_tokens

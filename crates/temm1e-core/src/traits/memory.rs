@@ -173,4 +173,97 @@ pub trait Memory: Send + Sync {
     async fn lambda_delete(&self, _hash: &str) -> Result<(), Temm1eError> {
         Ok(())
     }
+
+    // ── Tool reliability (v4.6.0) ─────────────────────────────────
+
+    /// Record a tool execution outcome for cross-session reliability tracking.
+    async fn record_tool_outcome(
+        &self,
+        _tool_name: &str,
+        _task_type: &str,
+        _success: bool,
+    ) -> Result<(), Temm1eError> {
+        Ok(())
+    }
+
+    /// Get tool reliability records (last 30 days, top 50 by sample size).
+    async fn get_tool_reliability(&self) -> Result<Vec<ToolReliabilityRecord>, Temm1eError> {
+        Ok(Vec::new())
+    }
+
+    // ── Classification outcomes (v4.6.0) ──────────────────────────
+
+    /// Record a classification outcome for empirical prior tracking.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_classification_outcome(
+        &self,
+        _category: &str,
+        _difficulty: &str,
+        _rounds: u32,
+        _tools_used: u32,
+        _cost_usd: f64,
+        _success: bool,
+        _prompt_tier: &str,
+        _had_whisper: bool,
+    ) -> Result<(), Temm1eError> {
+        Ok(())
+    }
+
+    /// Get aggregated classification priors (last 30 days).
+    async fn get_classification_priors(&self) -> Result<Vec<ClassificationPrior>, Temm1eError> {
+        Ok(Vec::new())
+    }
+
+    // ── Skill usage (v4.6.0) ──────────────────────────────────────
+
+    /// Record a skill invocation.
+    async fn record_skill_usage(&self, _skill_name: &str) -> Result<(), Temm1eError> {
+        Ok(())
+    }
+
+    /// Get skill usage records ordered by invocations DESC.
+    async fn get_skill_usage(&self) -> Result<Vec<SkillUsageRecord>, Temm1eError> {
+        Ok(Vec::new())
+    }
+}
+
+// ── Self-learning record types (v4.6.0) ───────────────────────────
+
+/// Tool reliability record — success/failure rates per (tool, task_type).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolReliabilityRecord {
+    pub tool_name: String,
+    pub task_type: String,
+    pub successes: u32,
+    pub failures: u32,
+    pub last_updated: u64,
+}
+
+impl ToolReliabilityRecord {
+    pub fn success_rate(&self) -> f64 {
+        let total = self.successes + self.failures;
+        if total == 0 {
+            return 0.5;
+        }
+        self.successes as f64 / total as f64
+    }
+}
+
+/// Classification empirical prior — aggregated resource usage per (category, difficulty).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassificationPrior {
+    pub category: String,
+    pub difficulty: String,
+    pub avg_rounds: f32,
+    pub avg_tools: f32,
+    pub avg_cost: f64,
+    pub count: u32,
+}
+
+/// Skill usage record — invocation tracking per skill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillUsageRecord {
+    pub skill_name: String,
+    pub invocations: u32,
+    pub last_invoked_at: u64,
 }

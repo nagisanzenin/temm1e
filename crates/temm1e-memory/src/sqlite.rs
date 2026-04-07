@@ -120,6 +120,70 @@ impl SqliteMemory {
         .await
         .map_err(|e| Temm1eError::Memory(format!("Failed to create lambda FTS5: {e}")))?;
 
+        // ── Tool reliability table (v4.6.0) ──────────────────────────
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tool_reliability (
+                tool_name TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                successes INTEGER NOT NULL DEFAULT 0,
+                failures INTEGER NOT NULL DEFAULT 0,
+                last_updated INTEGER NOT NULL,
+                PRIMARY KEY (tool_name, task_type)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("Failed to create tool_reliability: {e}")))?;
+
+        // ── Classification outcomes table (v4.6.0) ───────────────────
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS classification_outcomes (
+                category TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                rounds INTEGER NOT NULL,
+                tools_used INTEGER NOT NULL,
+                cost_usd REAL NOT NULL,
+                success INTEGER NOT NULL,
+                prompt_tier TEXT NOT NULL DEFAULT '',
+                had_whisper INTEGER NOT NULL DEFAULT 0,
+                timestamp INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Temm1eError::Memory(format!("Failed to create classification_outcomes: {e}"))
+        })?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_co_timestamp ON classification_outcomes(timestamp)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Temm1eError::Memory(format!(
+                "Failed to create classification_outcomes index: {e}"
+            ))
+        })?;
+
+        // ── Skill usage table (v4.6.0) ───────────────────────────────
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS skill_usage (
+                skill_name TEXT PRIMARY KEY,
+                invocations INTEGER NOT NULL DEFAULT 0,
+                last_invoked_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("Failed to create skill_usage: {e}")))?;
+
         Ok(())
     }
 }
@@ -545,6 +609,194 @@ impl Memory for SqliteMemory {
         debug!(hash = %hash, "Deleted λ-memory entry");
         Ok(())
     }
+
+    // ── Tool reliability (v4.6.0) ─────────────────────────────────
+
+    async fn record_tool_outcome(
+        &self,
+        tool_name: &str,
+        task_type: &str,
+        success: bool,
+    ) -> Result<(), Temm1eError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let (succ_inc, fail_inc) = if success { (1, 0) } else { (0, 1) };
+        sqlx::query(
+            "INSERT INTO tool_reliability (tool_name, task_type, successes, failures, last_updated) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(tool_name, task_type) DO UPDATE SET \
+             successes = successes + ?3, failures = failures + ?4, last_updated = ?5",
+        )
+        .bind(tool_name)
+        .bind(task_type)
+        .bind(succ_inc)
+        .bind(fail_inc)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("record_tool_outcome: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn get_tool_reliability(
+        &self,
+    ) -> Result<Vec<temm1e_core::ToolReliabilityRecord>, Temm1eError> {
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            - 30 * 86400;
+
+        let rows: Vec<ToolReliabilityRow> = sqlx::query_as(
+            "SELECT tool_name, task_type, successes, failures, last_updated \
+             FROM tool_reliability WHERE last_updated > ?1 \
+             ORDER BY (successes + failures) DESC LIMIT 50",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("get_tool_reliability: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| temm1e_core::ToolReliabilityRecord {
+                tool_name: r.tool_name,
+                task_type: r.task_type,
+                successes: r.successes as u32,
+                failures: r.failures as u32,
+                last_updated: r.last_updated as u64,
+            })
+            .collect())
+    }
+
+    // ── Classification outcomes (v4.6.0) ──────────────────────────
+
+    async fn record_classification_outcome(
+        &self,
+        category: &str,
+        difficulty: &str,
+        rounds: u32,
+        tools_used: u32,
+        cost_usd: f64,
+        success: bool,
+        prompt_tier: &str,
+        had_whisper: bool,
+    ) -> Result<(), Temm1eError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        sqlx::query(
+            "INSERT INTO classification_outcomes \
+             (category, difficulty, rounds, tools_used, cost_usd, success, \
+              prompt_tier, had_whisper, timestamp) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(category)
+        .bind(difficulty)
+        .bind(rounds as i32)
+        .bind(tools_used as i32)
+        .bind(cost_usd)
+        .bind(success as i32)
+        .bind(prompt_tier)
+        .bind(had_whisper as i32)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("record_classification_outcome: {e}")))?;
+
+        // Retention: keep last 500 records
+        let _ = sqlx::query(
+            "DELETE FROM classification_outcomes WHERE rowid NOT IN \
+             (SELECT rowid FROM classification_outcomes ORDER BY timestamp DESC LIMIT 500)",
+        )
+        .execute(&self.pool)
+        .await;
+
+        Ok(())
+    }
+
+    async fn get_classification_priors(
+        &self,
+    ) -> Result<Vec<temm1e_core::ClassificationPrior>, Temm1eError> {
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            - 30 * 86400;
+
+        let rows: Vec<ClassificationPriorRow> = sqlx::query_as(
+            "SELECT category, difficulty, \
+             AVG(rounds) as avg_rounds, AVG(tools_used) as avg_tools, \
+             AVG(cost_usd) as avg_cost, COUNT(*) as cnt \
+             FROM classification_outcomes WHERE timestamp > ?1 \
+             GROUP BY category, difficulty \
+             ORDER BY cnt DESC",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("get_classification_priors: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| temm1e_core::ClassificationPrior {
+                category: r.category,
+                difficulty: r.difficulty,
+                avg_rounds: r.avg_rounds as f32,
+                avg_tools: r.avg_tools as f32,
+                avg_cost: r.avg_cost,
+                count: r.cnt as u32,
+            })
+            .collect())
+    }
+
+    // ── Skill usage (v4.6.0) ──────────────────────────────────────
+
+    async fn record_skill_usage(&self, skill_name: &str) -> Result<(), Temm1eError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        sqlx::query(
+            "INSERT INTO skill_usage (skill_name, invocations, last_invoked_at) \
+             VALUES (?1, 1, ?2) \
+             ON CONFLICT(skill_name) DO UPDATE SET \
+             invocations = invocations + 1, last_invoked_at = ?2",
+        )
+        .bind(skill_name)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("record_skill_usage: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn get_skill_usage(&self) -> Result<Vec<temm1e_core::SkillUsageRecord>, Temm1eError> {
+        let rows: Vec<SkillUsageRow> = sqlx::query_as(
+            "SELECT skill_name, invocations, last_invoked_at \
+             FROM skill_usage ORDER BY invocations DESC LIMIT 30",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("get_skill_usage: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| temm1e_core::SkillUsageRecord {
+                skill_name: r.skill_name,
+                invocations: r.invocations as u32,
+                last_invoked_at: r.last_invoked_at as u64,
+            })
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +892,32 @@ fn lambda_type_to_str(lt: &LambdaMemoryType) -> &'static str {
         LambdaMemoryType::Knowledge => "knowledge",
         LambdaMemoryType::Learning => "learning",
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ToolReliabilityRow {
+    tool_name: String,
+    task_type: String,
+    successes: i32,
+    failures: i32,
+    last_updated: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct ClassificationPriorRow {
+    category: String,
+    difficulty: String,
+    avg_rounds: f64,
+    avg_tools: f64,
+    avg_cost: f64,
+    cnt: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct SkillUsageRow {
+    skill_name: String,
+    invocations: i32,
+    last_invoked_at: i64,
 }
 
 fn str_to_entry_type(s: &str) -> Result<MemoryEntryType, Temm1eError> {

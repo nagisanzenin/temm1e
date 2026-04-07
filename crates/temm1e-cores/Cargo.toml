@@ -17,6 +17,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 dirs.workspace = true
 
 [dev-dependencies]

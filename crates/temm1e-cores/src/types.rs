@@ -48,6 +48,14 @@ impl CoreStats {
         self.failures += 1;
         self.total_cost_usd += cost;
     }
+
+    /// Success rate as a fraction in [0.0, 1.0].
+    pub fn success_rate(&self) -> f64 {
+        if self.invocations == 0 {
+            return 0.0;
+        }
+        self.successes as f64 / self.invocations as f64
+    }
 }
 
 #[cfg(test)]

@@ -388,6 +388,7 @@ impl AgentRuntime {
         let mut tool_results_this_turn: Vec<String> = Vec::new();
         let mut max_consecutive_failures_seen: u32 = 0;
         let mut strategy_rotations_count: u32 = 0;
+        let mut had_whisper = false;
 
         // Build user text — include attachment descriptions if no text provided
         let mut user_text = match (&msg.text, msg.attachments.is_empty()) {
@@ -1061,6 +1062,7 @@ impl AgentRuntime {
                         .record_usage(cu.input_tokens, cu.output_tokens, cu.cost_usd);
                 }
                 if let Some(injection) = injection {
+                    had_whisper = true;
                     let consciousness_block = format!(
                         "{{{{consciousness}}}}\n\
                          [Your consciousness — a separate observer watching this conversation — shares this insight:]\n\
@@ -1453,6 +1455,25 @@ impl AgentRuntime {
                             "Persisted task learning (V3)"
                         );
                     }
+                }
+
+                // ── Classification outcome tracking (v4.6.0 self-learning) ──
+                {
+                    let tools_count = tools_called_this_turn.len() as u32;
+                    let tier_name = prompt_tier.map(|t| format!("{:?}", t)).unwrap_or_default();
+                    let _ = self
+                        .memory
+                        .record_classification_outcome(
+                            &classification_label,
+                            &difficulty_label,
+                            rounds as u32,
+                            tools_count,
+                            turn_cost_usd,
+                            !interrupted,
+                            &tier_name,
+                            had_whisper,
+                        )
+                        .await;
                 }
 
                 // ── Blueprint Authoring (async, non-blocking) ──────────
@@ -1855,6 +1876,15 @@ impl AgentRuntime {
                     }
                 } else {
                     tool_results_this_turn.push("success".to_string());
+                }
+
+                // Tool reliability tracking (v4.6.0 self-learning)
+                {
+                    let task_label = format!("{}:{}", &classification_label, &difficulty_label);
+                    let _ = self
+                        .memory
+                        .record_tool_outcome(tool_name, &task_label, !is_error)
+                        .await;
                 }
 
                 // V2: Structured failure classification

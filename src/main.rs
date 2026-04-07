@@ -2077,6 +2077,7 @@ async fn main() -> Result<()> {
                             model_pricing,
                             model.clone(),
                             config.agent.max_context_tokens,
+                            memory.clone(), // v4.6.0: core stats persistence
                         );
                         tools.push(Arc::new(invoke_core));
                         tracing::info!("TemDOS invoke_core tool registered");
@@ -5241,6 +5242,7 @@ Just type a message to chat with the AI agent.",
                                     model_pricing,
                                     model.clone(),
                                     max_ctx,
+                                    memory.clone(), // v4.6.0: core stats persistence
                                 );
                                 tools_template.push(Arc::new(invoke_core));
                                 tracing::info!("TemDOS invoke_core tool registered (CLI)");

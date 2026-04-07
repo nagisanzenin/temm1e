@@ -112,6 +112,7 @@ pub fn create_tools(
 
     // memory_manage: persistent knowledge store for the agent
     // lambda_recall: recall faded λ-memories by hash prefix
+    let memory_for_skills = memory.clone(); // retain clone for skill tool
     if let Some(mem) = memory {
         tools.push(Arc::new(MemoryManageTool::new(Arc::clone(&mem))));
         tools.push(Arc::new(LambdaRecallTool::new(mem)));
@@ -132,7 +133,7 @@ pub fn create_tools(
 
     // use_skill: discover and invoke installed skills
     if let Some(reg) = skill_registry {
-        tools.push(Arc::new(SkillTool::new(reg)));
+        tools.push(Arc::new(SkillTool::new(reg, memory_for_skills)));
     }
 
     // browser: headless Chrome automation (stealth mode)
@@ -208,6 +209,7 @@ pub fn create_tools_with_browser(
         tools.push(Arc::new(CheckMessagesTool::new(pending)));
     }
 
+    let memory_for_skills2 = memory.clone();
     if let Some(mem) = memory {
         tools.push(Arc::new(MemoryManageTool::new(Arc::clone(&mem))));
         tools.push(Arc::new(LambdaRecallTool::new(mem)));
@@ -225,7 +227,7 @@ pub fn create_tools_with_browser(
 
     // use_skill: discover and invoke installed skills
     if let Some(reg) = skill_registry {
-        tools.push(Arc::new(SkillTool::new(reg)));
+        tools.push(Arc::new(SkillTool::new(reg, memory_for_skills2)));
     }
 
     // browser: create as Arc<BrowserTool> and keep a reference

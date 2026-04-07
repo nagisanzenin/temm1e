@@ -15,11 +15,12 @@ use tokio::sync::RwLock;
 
 use temm1e_agent::budget::{BudgetTracker, ModelPricing};
 use temm1e_core::types::error::Temm1eError;
-use temm1e_core::{Provider, Tool, ToolContext, ToolDeclarations, ToolInput, ToolOutput};
-use tracing::info;
+use temm1e_core::{Memory, Provider, Tool, ToolContext, ToolDeclarations, ToolInput, ToolOutput};
+use tracing::{debug, info, warn};
 
 use crate::registry::CoreRegistry;
 use crate::runtime::CoreRuntime;
+use crate::types::CoreStats;
 
 /// The `invoke_core` tool — invokes a TemDOS specialist core from the main
 /// agent's tool loop.
@@ -38,6 +39,8 @@ pub struct InvokeCoreTool {
     model: String,
     /// Maximum context tokens for core LLM calls.
     max_context_tokens: usize,
+    /// Memory backend for persisting core stats (v4.6.0 self-learning).
+    memory: Arc<dyn Memory>,
 }
 
 impl InvokeCoreTool {
@@ -51,6 +54,7 @@ impl InvokeCoreTool {
         model_pricing: ModelPricing,
         model: String,
         max_context_tokens: usize,
+        memory: Arc<dyn Memory>,
     ) -> Self {
         Self {
             registry,
@@ -60,6 +64,7 @@ impl InvokeCoreTool {
             model_pricing,
             model,
             max_context_tokens,
+            memory,
         }
     }
 
@@ -193,15 +198,71 @@ impl Tool for InvokeCoreTool {
             temperature,
         );
 
+        // Load existing core stats
+        let stats_id = format!("core_stats:{}", core_name_owned);
+        let mut stats: CoreStats = self
+            .memory
+            .search(
+                &stats_id,
+                temm1e_core::SearchOpts {
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .first()
+                    .and_then(|e| serde_json::from_str(&e.content).ok())
+            })
+            .unwrap_or_default();
+
         // Use the actual working directory for the core so it can find project files.
         // Fall back to the tool context workspace, then the configured workspace.
         let core_workspace = std::env::current_dir().unwrap_or_else(|_| ctx.workspace_path.clone());
-        let result = runtime.run(&task, core_workspace).await?;
+        let run_result = runtime.run(&task, core_workspace).await;
 
-        // Format output with metadata
+        // Record outcome in stats
+        match &run_result {
+            Ok(r) => stats.record_success(r.rounds, r.cost_usd),
+            Err(_) => stats.record_failure(0.0),
+        }
+
+        // Persist updated stats (fire-and-forget)
+        let entry = temm1e_core::MemoryEntry {
+            id: stats_id,
+            content: serde_json::to_string(&stats).unwrap_or_default(),
+            entry_type: temm1e_core::MemoryEntryType::Knowledge,
+            metadata: serde_json::json!({
+                "type": "core_stats",
+                "core_name": core_name_owned,
+            }),
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+        };
+        if let Err(e) = self.memory.store(entry).await {
+            warn!(error = %e, core = %core_name_owned, "Failed to persist core stats");
+        } else {
+            debug!(
+                core = %core_name_owned,
+                success_rate = stats.success_rate(),
+                invocations = stats.invocations,
+                "Core stats updated"
+            );
+        }
+
+        let result = run_result?;
+
+        // Format output with metadata + stats
         let output = format!(
-            "{}\n\n---\n[TemDOS:{} | {} rounds | ${:.4}]",
-            result.output, core_name_owned, result.rounds, result.cost_usd
+            "{}\n\n---\n[TemDOS:{} | {} rounds | ${:.4} | lifetime: {:.0}% success (N={})]",
+            result.output,
+            core_name_owned,
+            result.rounds,
+            result.cost_usd,
+            stats.success_rate() * 100.0,
+            stats.invocations,
         );
 
         Ok(ToolOutput {
@@ -289,11 +350,48 @@ mod tests {
             },
             model: "test".to_string(),
             max_context_tokens: 30_000,
+            memory: Arc::new(MockMemory),
         };
 
         let filtered = tool.filtered_tools();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name(), "shell");
+    }
+
+    // Minimal mock memory for compile
+    struct MockMemory;
+
+    #[async_trait]
+    impl Memory for MockMemory {
+        async fn store(&self, _entry: temm1e_core::MemoryEntry) -> Result<(), Temm1eError> {
+            Ok(())
+        }
+        async fn search(
+            &self,
+            _query: &str,
+            _opts: temm1e_core::SearchOpts,
+        ) -> Result<Vec<temm1e_core::MemoryEntry>, Temm1eError> {
+            Ok(vec![])
+        }
+        async fn get(&self, _id: &str) -> Result<Option<temm1e_core::MemoryEntry>, Temm1eError> {
+            Ok(None)
+        }
+        async fn delete(&self, _id: &str) -> Result<(), Temm1eError> {
+            Ok(())
+        }
+        async fn list_sessions(&self) -> Result<Vec<String>, Temm1eError> {
+            Ok(vec![])
+        }
+        async fn get_session_history(
+            &self,
+            _session_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<temm1e_core::MemoryEntry>, Temm1eError> {
+            Ok(vec![])
+        }
+        fn backend_name(&self) -> &str {
+            "mock"
+        }
     }
 
     // Minimal mock provider for compile
