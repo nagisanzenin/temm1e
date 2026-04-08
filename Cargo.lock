@@ -7386,6 +7386,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "temm1e-watchdog"
+version = "4.6.1"
+dependencies = [
+ "clap",
+ "tempfile",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

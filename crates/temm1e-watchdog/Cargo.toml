@@ -1,0 +1,17 @@
+[package]
+name = "temm1e-watchdog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Minimal supervisor for the temm1e binary — restarts on crash, never modifiable by self-grow"
+
+[[bin]]
+name = "temm1e-watchdog"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

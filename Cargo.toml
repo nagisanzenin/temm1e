@@ -25,6 +25,7 @@ members = [
     "crates/temm1e-anima",
     "crates/temm1e-cores",
     "crates/temm1e-self-grow",
+    "crates/temm1e-watchdog",
 ]
 
 [workspace.package]

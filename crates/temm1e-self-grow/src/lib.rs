@@ -17,6 +17,7 @@
 //! here, ready to be wired into the agent runtime.
 
 pub mod budget;
+pub mod deploy;
 pub mod history;
 pub mod pipeline;
 pub mod sandbox;
