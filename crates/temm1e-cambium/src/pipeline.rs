@@ -1,4 +1,4 @@
-//! # Pipeline: orchestration of the self-grow verification stages.
+//! # Pipeline: orchestration of the cambium verification stages.
 //!
 //! This module ties together the sandbox, zone checker, trust engine,
 //! budget enforcer, and history into a deterministic state machine.
@@ -13,10 +13,10 @@
 //! different LLM providers.
 
 use chrono::Utc;
-use temm1e_core::types::error::Temm1eError;
-use temm1e_core::types::self_grow::{
+use temm1e_core::types::cambium::{
     GrowthKind, GrowthOutcome, GrowthSession, GrowthTrigger, PipelineStage, StageResult, TrustLevel,
 };
+use temm1e_core::types::error::Temm1eError;
 
 use crate::budget::SessionBudget;
 use crate::sandbox::Sandbox;
@@ -191,7 +191,7 @@ impl<'a> Pipeline<'a> {
             session.stages = stages;
             session.completed_at = Some(Utc::now());
             tracing::warn!(
-                target: "self_grow",
+                target: "cambium",
                 session = %session_id,
                 reason = %reason,
                 "Pipeline aborted: budget exceeded"
@@ -216,7 +216,7 @@ impl<'a> Pipeline<'a> {
             session.stages = stages;
             session.completed_at = Some(Utc::now());
             tracing::error!(
-                target: "self_grow",
+                target: "cambium",
                 session = %session_id,
                 files = ?file_strs,
                 "Pipeline hard abort: zone violation"
@@ -368,7 +368,7 @@ impl<'a> Pipeline<'a> {
         // pushes it manually.
         if self.config.commit_on_success {
             let message = format!(
-                "self-grow: {}\n\nTrigger: {:?}\nKind: {:?}\nSession: {}",
+                "cambium: {}\n\nTrigger: {:?}\nKind: {:?}\nSession: {}",
                 describe_kind(&kind),
                 trigger,
                 kind,
@@ -414,7 +414,7 @@ impl<'a> Pipeline<'a> {
         session.completed_at = Some(Utc::now());
 
         tracing::info!(
-            target: "self_grow",
+            target: "cambium",
             session = %session_id,
             files_changed = session.files_changed.len(),
             lines_added,

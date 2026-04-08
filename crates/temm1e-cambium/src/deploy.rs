@@ -1,6 +1,6 @@
 //! # Deploy: orchestrated binary swap with rollback.
 //!
-//! This module performs the operational heart of self-grow Phase 5: replacing
+//! This module performs the operational heart of Cambium Phase 5: replacing
 //! the running Tem binary with a freshly-built one, with automatic rollback
 //! on health-check failure.
 //!
@@ -24,7 +24,7 @@
 //!   stateless. In-flight messages get a brief interruption.
 //! - It does NOT implement true zero-downtime. There is a ~3-5 second window
 //!   between stopping the old binary and starting the new one. This is
-//!   acceptable for self-grow use; production HA needs a load balancer.
+//!   acceptable for cambium use; production HA needs a load balancer.
 //! - It does NOT push or pull from any remote. All operations are local.
 
 use std::path::{Path, PathBuf};
@@ -54,10 +54,10 @@ pub struct DeployConfig {
     /// e.g. `/tmp/temm1e-deploy-test/temm1e`
     pub installed_binary: PathBuf,
     /// Absolute path to the directory where backup binaries are stored.
-    /// e.g. `~/.temm1e/self-grow/rollback/`
+    /// e.g. `~/.temm1e/cambium/rollback/`
     pub rollback_dir: PathBuf,
     /// Absolute path to the staging directory where new binaries land
-    /// before they are installed. e.g. `~/.temm1e/self-grow/staging/`
+    /// before they are installed. e.g. `~/.temm1e/cambium/staging/`
     pub staging_dir: PathBuf,
     /// Optional path to the PID file of the running process. If set, the
     /// deployer will SIGTERM the PID and wait for exit. If unset, the

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use temm1e_self_grow::deploy::{DeployConfig, DeployOutcome, Deployer};
+use temm1e_cambium::deploy::{DeployConfig, DeployOutcome, Deployer};
 use tempfile::tempdir;
 use tokio::process::Command;
 

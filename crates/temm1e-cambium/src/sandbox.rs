@@ -1,30 +1,30 @@
-//! # Sandbox: isolated workspace for self-grow code modifications.
+//! # Sandbox: isolated workspace for cambium code modifications.
 //!
 //! The sandbox is a dedicated full git clone of the production repository,
-//! living at `~/.temm1e/self-grow/sandbox/`. ALL self-grow code generation,
+//! living at `~/.temm1e/cambium/sandbox/`. ALL cambium code generation,
 //! compilation, and testing happens inside this sandbox. The production
 //! workspace is NEVER touched.
 //!
 //! ## Why a dedicated clone (not a worktree):
 //!
 //! - Total isolation: separate git database, separate `target/`, separate
-//!   working tree. Even a catastrophic bug in self-grow cannot affect the
+//!   working tree. Even a catastrophic bug in cambium cannot affect the
 //!   production codebase.
 //! - Persistent build cache: after the first ~2.5 min cold compile,
 //!   incremental builds take seconds. Self-grow sessions produce small
 //!   diffs, so this matters a lot.
-//! - Inspectable: `cd ~/.temm1e/self-grow/sandbox/` and look at exactly
+//! - Inspectable: `cd ~/.temm1e/cambium/sandbox/` and look at exactly
 //!   what Tem did. Read the git log. Run tests yourself.
 //! - Clean merge path: Tem pushes a branch from sandbox to origin. User
 //!   reviews. User merges. Same workflow as any developer.
 //!
 //! ## Production safety guarantees:
 //!
-//! - Sandbox is created in `~/.temm1e/self-grow/sandbox/`, NEVER in the
+//! - Sandbox is created in `~/.temm1e/cambium/sandbox/`, NEVER in the
 //!   production workspace.
 //! - Sandbox sync uses `git fetch origin` + `git reset --hard origin/main`
 //!   — this only pulls from origin, never pushes.
-//! - Sandbox push targets a branch named `self-grow/<session-id>` —
+//! - Sandbox push targets a branch named `cambium/<session-id>` —
 //!   NEVER main, NEVER force-push.
 //! - All commands are validated and timeouts are enforced.
 
@@ -35,12 +35,12 @@ use tokio::time::timeout;
 
 use temm1e_core::types::error::Temm1eError;
 
-/// Default location for the self-grow sandbox.
+/// Default location for the cambium sandbox.
 pub fn default_sandbox_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".temm1e").join("self-grow").join("sandbox"))
+    dirs::home_dir().map(|home| home.join(".temm1e").join("cambium").join("sandbox"))
 }
 
-/// Manages the lifecycle of a self-grow sandbox: a dedicated git clone
+/// Manages the lifecycle of a cambium sandbox: a dedicated git clone
 /// for code modifications, isolated from the production workspace.
 #[derive(Debug, Clone)]
 pub struct Sandbox {
@@ -85,7 +85,7 @@ impl Sandbox {
     pub async fn init(&self) -> Result<(), Temm1eError> {
         if self.exists().await {
             tracing::info!(
-                target: "self_grow",
+                target: "cambium",
                 path = %self.path.display(),
                 "Sandbox already initialized"
             );
@@ -103,7 +103,7 @@ impl Sandbox {
         }
 
         tracing::info!(
-            target: "self_grow",
+            target: "cambium",
             upstream = %self.upstream,
             path = %self.path.display(),
             "Cloning sandbox"
@@ -179,17 +179,17 @@ impl Sandbox {
         }
 
         tracing::info!(
-            target: "self_grow",
+            target: "cambium",
             path = %self.path.display(),
             "Sandbox synced to upstream"
         );
         Ok(())
     }
 
-    /// Create a new branch in the sandbox for a self-grow session.
-    /// Branch name will be prefixed with `self-grow/`.
+    /// Create a new branch in the sandbox for a cambium session.
+    /// Branch name will be prefixed with `cambium/`.
     pub async fn create_branch(&self, session_id: &str) -> Result<String, Temm1eError> {
-        let branch = format!("self-grow/{session_id}");
+        let branch = format!("cambium/{session_id}");
         let result = self
             .run_in_sandbox("git", &["checkout", "-b", &branch])
             .await?;
@@ -526,7 +526,7 @@ mod tests {
         if let Some(root) = default_sandbox_root() {
             let s = root.to_string_lossy();
             assert!(s.contains(".temm1e"));
-            assert!(s.contains("self-grow"));
+            assert!(s.contains("cambium"));
             assert!(s.contains("sandbox"));
         }
     }

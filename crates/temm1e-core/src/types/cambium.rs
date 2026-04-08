@@ -40,7 +40,7 @@ pub enum GrowthKind {
 /// Trust level for a specific modification scope.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TrustLevel {
-    /// Level 0: Immutable. Cannot be modified by self-grow.
+    /// Level 0: Immutable. Cannot be modified by cambium.
     Immutable = 0,
     /// Level 1: Requires explicit human approval before commit.
     ApprovalRequired = 1,
@@ -118,7 +118,7 @@ pub enum GrowthOutcome {
     RolledBack { reason: String },
 }
 
-/// A complete record of one self-grow session.
+/// A complete record of one cambium session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrowthSession {
     pub id: String,
@@ -332,7 +332,7 @@ mod tests {
             files_changed: vec!["skills/test.md".into()],
             lines_added: 10,
             lines_removed: 0,
-            git_branch: Some("self-grow/test".into()),
+            git_branch: Some("cambium/test".into()),
             git_commit: None,
             outcome: GrowthOutcome::InProgress,
             cost_usd: 0.003,

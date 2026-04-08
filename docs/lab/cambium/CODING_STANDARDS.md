@@ -1,8 +1,8 @@
-# Self-Grow: Coding Standards
+# Cambium: Coding Standards
 
-> **Status:** Mandatory rules for all self-grown code  
+> **Status:** Mandatory rules for all cambiumn code  
 > **Date:** 2026-04-08  
-> **Purpose:** Every line of code produced by self-grow must comply with these standards. The verification pipeline checks these mechanically.
+> **Purpose:** Every line of code produced by cambium must comply with these standards. The verification pipeline checks these mechanically.
 
 ---
 
@@ -109,7 +109,7 @@
 
 - **No new external dependencies without approval.** Self-grow MUST NOT add new entries to `[workspace.dependencies]` in the root `Cargo.toml`. This is a Level 0 file.
 - Use only dependencies already declared in the workspace.
-- If a new dependency is genuinely needed, self-grow must propose it as a Level 1 change (approval required).
+- If a new dependency is genuinely needed, cambium must propose it as a Level 1 change (approval required).
 
 ---
 
@@ -135,7 +135,7 @@
 
 ## Compilation Gate
 
-Every self-grow change must pass all four gates before it can be committed:
+Every cambium change must pass all four gates before it can be committed:
 
 ```bash
 cargo check --workspace

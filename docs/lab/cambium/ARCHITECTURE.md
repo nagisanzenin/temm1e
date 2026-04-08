@@ -1,6 +1,6 @@
-# Self-Grow: Architecture Reference
+# Cambium: Architecture Reference
 
-> **Status:** Reference document for self-grow crate map  
+> **Status:** Reference document for cambium crate map  
 > **Date:** 2026-04-08  
 > **Purpose:** Tem's self-knowledge of its own architecture (Principle 6)
 
@@ -180,7 +180,7 @@ Self-grow may modify these crates autonomously, provided all compilation gates p
 
 ### Level 3 -- Autonomous Basic
 
-Not crates, but file zones where self-grow operates with minimal oversight:
+Not crates, but file zones where cambium operates with minimal oversight:
 
 - `docs/**` -- Documentation files
 - `tests/**` -- Integration test files

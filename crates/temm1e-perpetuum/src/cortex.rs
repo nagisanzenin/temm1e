@@ -432,7 +432,7 @@ impl Cortex {
             "session_cleanup" => SelfWorkKind::SessionCleanup,
             "blueprint_refinement" => SelfWorkKind::BlueprintRefinement,
             "vigil" => SelfWorkKind::Vigil,
-            "self_grow_skills" => SelfWorkKind::SelfGrowSkills,
+            "cambium_skills" => SelfWorkKind::CambiumSkills,
             _ => SelfWorkKind::MemoryConsolidation,
         };
 

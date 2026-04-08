@@ -1,20 +1,37 @@
-# Self-Grow: Theoretical Foundation
+# Cambium: Theoretical Foundation
 
-> **Status:** Working theory — v0.1  
+> **Status:** Working theory — v1.0  
 > **Date:** 2026-04-08  
-> **Scope:** Foundational theory for Tem's self-growing capability  
+> **Scope:** Foundational theory for Tem's gap-driven self-grow capability
+
+---
+
+## The Cambium Metaphor
+
+In a tree, the **cambium** is the thin layer of growth tissue just under the bark. Each year the tree adds a new ring of cambium, getting larger and stronger while the **heartwood** (the core trunk) stays stable forever. The tree's history is recorded in its rings.
+
+This is exactly how Tem's self-grow capability works:
+
+| Botanical | Tem |
+|-----------|-----|
+| **Heartwood** | Immutable kernel: vault, core traits, security, the Cambium pipeline itself |
+| **Cambium** | The growth layer: tools, skills, cores, integrations — where new capabilities are added |
+| **Bark** | The runtime surface: channels, gateway, agent — what users interact with |
+| **Rings** | `GrowthSession` history: one ring per growth cycle, permanently recorded |
+
+Cambium adds layers at the edge while the heartwood remains untouched. Every growth cycle is recorded as a ring. The tree gets larger over time, but its identity is preserved.
 
 ---
 
 ## I. The Thesis
 
-Tem is a runtime that orchestrates AI providers, tools, memory, and communication channels. The runtime is Rust code. The AI is external (Claude, GPT, Gemini). When Tem "self-grows," it does not make the AI smarter — it makes the **orchestration** better. It improves the bridge between what users need and what the system can deliver.
+Tem is a runtime that orchestrates AI providers, tools, memory, and communication channels. The runtime is Rust code. The AI is external (Claude, GPT, Gemini). When Tem grows through **Cambium**, it does not make the AI smarter — it makes the **orchestration** better. Cambium improves the bridge between what users need and what the system can deliver.
 
-Self-growing is **gap-driven code evolution through a verification harness.**
+Cambium is **gap-driven code evolution through a verification harness.**
 
 The entity observes a gap between user need and system capability, designs a solution, writes code, and passes it through a deterministic verification pipeline that is itself immutable. The quality of generated code depends on the LLM. The safety of deployed code depends on the pipeline. These two concerns are separated by design.
 
-This separation is what makes the system timeproof: as LLMs improve, the code quality improves, the growth rate accelerates — but the safety guarantees remain constant because they are mechanical, not probabilistic.
+This separation is what makes Cambium timeproof: as LLMs improve, the code quality improves, the growth rate accelerates — but the safety guarantees remain constant because they are mechanical, not probabilistic.
 
 ---
 
@@ -58,7 +75,7 @@ Tem maintains an accurate, current model of its own architecture — crate graph
 
 ### Principle 7: Every Growth Action is Reversible
 
-No self-grow change creates irreversible state. Every change is committed to version control, every binary has a rollback, every database has a snapshot. If a change causes harm, it can be undone completely.
+No cambium change creates irreversible state. Every change is committed to version control, every binary has a rollback, every database has a snapshot. If a change causes harm, it can be undone completely.
 
 **Why this matters:** Reversibility is the ultimate safety net. It makes every growth action a safe experiment rather than a permanent commitment.
 
@@ -76,15 +93,15 @@ Every growth action is logged with full context: what triggered it, what was cha
 
 ### Principle 10: The Human Can Always Override
 
-The user can disable self-grow entirely, rollback any specific change, modify trust levels, or add/remove protected zones at any time. The system serves the user; the user does not serve the system.
+The user can disable cambium entirely, rollback any specific change, modify trust levels, or add/remove protected zones at any time. The system serves the user; the user does not serve the system.
 
 **Why this matters:** Self-grow is a tool for human benefit. The moment the human loses control, it becomes a liability.
 
 ---
 
-## III. What Self-Grow Is (and Is Not)
+## III. What Cambium Is (and Is Not)
 
-### Self-Grow IS:
+### Cambium IS:
 
 **Supervised code evolution.** Tem observes a gap, reads its own architecture, designs a solution, writes Rust code, passes it through a deterministic verification pipeline, and deploys if verified. "Supervised" refers to the pipeline, not a human — the pipeline is mechanical, predictable, and immutable.
 
@@ -94,7 +111,7 @@ The user can disable self-grow entirely, rollback any specific change, modify tr
 
 **An enabler for future LLMs.** Today's LLMs produce modest code improvements that pass the pipeline slowly. Future LLMs will produce better code that passes the pipeline faster. The pipeline does not need to change — it was designed for a capability level that doesn't exist yet.
 
-### Self-Grow IS NOT:
+### Cambium IS NOT:
 
 **Recursive self-improvement.** Tem does not make the AI smarter or modify its own intelligence. The AI is external. Tem modifies its runtime orchestration — the equivalent of a developer improving their IDE, not improving their brain.
 
@@ -106,7 +123,7 @@ The user can disable self-grow entirely, rollback any specific change, modify tr
 
 ---
 
-## IV. The Goal of Self-Growing
+## IV. The Goal of Cambiuming
 
 ### Primary Goal
 
@@ -148,12 +165,12 @@ Each output is concrete, testable, and measurable. "Make Tem better" is not a va
 
 ### The Trust Hierarchy
 
-The codebase is divided into zones based on modification risk. The zones are defined in `PROTECTED_ZONES.md` and enforced by the self-grow pipeline (which is itself in the highest protection zone).
+The codebase is divided into zones based on modification risk. The zones are defined in `PROTECTED_ZONES.md` and enforced by the cambium pipeline (which is itself in the highest protection zone).
 
 ```
-LEVEL 0 — IMMUTABLE KERNEL (never modifiable by self-grow)
+LEVEL 0 — IMMUTABLE KERNEL (never modifiable by cambium)
 │
-│  The self-grow pipeline code itself
+│  The cambium pipeline code itself
 │  Guardrail enforcement and zone checking
 │  temm1e-vault (encryption, credential management)
 │  temm1e-core/src/traits/ (architectural contracts)
@@ -166,7 +183,7 @@ LEVEL 0 — IMMUTABLE KERNEL (never modifiable by self-grow)
 │  If any Level 0 file's checksum changes, the entire
 │  growth session is aborted and the user is alerted.
 │
-│  Rationale: These files define WHAT self-grow is and
+│  Rationale: These files define WHAT cambium is and
 │  HOW it operates. If they could be modified, there
 │  would be no stable safety guarantee.
 │
@@ -223,11 +240,11 @@ LEVEL 0 — IMMUTABLE KERNEL (never modifiable by self-grow)
 │  cannot break the system.
 ```
 
-### What Self-Grow Can NEVER Do
+### What Cambium Can NEVER Do
 
 Regardless of trust level, track record, or LLM capability:
 
-1. **Modify the self-grow pipeline** — the judge cannot modify itself
+1. **Modify the cambium pipeline** — the judge cannot modify itself
 2. **Remove tests** — tests can be added, never deleted
 3. **Add `unsafe` Rust blocks** — no escape from the type system
 4. **Add external crate dependencies without approval** — supply chain risk
@@ -268,11 +285,11 @@ This creates a natural ramp: cautious start, earned freedom, rapid correction on
 
 ## VI. Current Capabilities Assessment
 
-What TEMM1E can do TODAY that is directly relevant to self-growing:
+What TEMM1E can do TODAY that is directly relevant to cambiuming:
 
 ### Already Enabled
 
-| Capability | Crate | Relevance to Self-Grow |
+| Capability | Crate | Relevance to Cambium |
 |------------|-------|----------------------|
 | **File read/write** | temm1e-tools | Tem can read its own source code and write new code |
 | **Shell execution** | temm1e-tools | Tem can run `cargo check`, `cargo test`, `cargo build` |
@@ -296,23 +313,23 @@ What TEMM1E can do TODAY that is directly relevant to self-growing:
 | **Volition** | `perpetuum.volition.enabled` | Proactive agency — powerful but needs careful scoping |
 | **Eigen-Tune** | `eigen_tune.enabled` | Full distillation pipeline — resource intensive |
 
-### Not Yet Implemented (Required for Self-Grow)
+### Not Yet Implemented (Required for Cambium)
 
 | Capability | Purpose | Difficulty |
 |------------|---------|-----------|
-| **Self-grow pipeline** | Orchestrates the full grow cycle | New crate: `temm1e-self-grow` |
+| **Self-grow pipeline** | Orchestrates the full grow cycle | New crate: `temm1e-cambium` |
 | **Codebase self-model** | Machine-readable architecture description | Documentation + generation scripts |
 | **Blue-green binary swap** | Deploy new binary without downtime | Process management + state serialization |
 | **Watchdog process** | Monitors new binary, rollback on failure | Lightweight separate binary |
 | **Protected zone enforcement** | SHA-256 checksums on immutable files | Pre-commit validation |
 | **Trust level state machine** | Track record → earned autonomy | SQLite persistence |
 | **Session budget tracking** | Rate limits + cooldowns for growth | Extension of existing BudgetTracker |
-| **CodeReviewer core definition** | Reviews self-grow diffs for quality | `.core` markdown file |
+| **CodeReviewer core definition** | Reviews cambium diffs for quality | `.core` markdown file |
 | **SecurityAuditor core definition** | Reviews diffs for vulnerabilities | `.core` markdown file |
 
 ### The Readiness Assessment
 
-**Infrastructure readiness: ~80%.** Tem already has the tools to read code, write code, compile, test, commit, schedule, and coordinate. What's missing is the **pipeline orchestration** (temm1e-self-grow crate) and the **safety infrastructure** (protected zones, watchdog, trust state machine).
+**Infrastructure readiness: ~80%.** Tem already has the tools to read code, write code, compile, test, commit, schedule, and coordinate. What's missing is the **pipeline orchestration** (temm1e-cambium crate) and the **safety infrastructure** (protected zones, watchdog, trust state machine).
 
 **The hardest unsolved problem:** Binary swap. Rust compiles to a static binary. There is no hot-reload. The running process must be replaced with a new process while preserving state and minimizing downtime. This is a solved problem in deployment engineering (blue-green, canary) but novel in the context of an entity replacing itself.
 
@@ -322,7 +339,7 @@ What TEMM1E can do TODAY that is directly relevant to self-growing:
 
 ### The Core Insight
 
-The self-grow pipeline is a **verification harness** with a **pluggable code generator.**
+The cambium pipeline is a **verification harness** with a **pluggable code generator.**
 
 ```
 ┌──────────────────────────┐
@@ -380,11 +397,11 @@ The pipeline is the **constant**. The LLM is the **variable**. As the variable i
 
 ### What the System Provides That Future LLMs Need
 
-Even a vastly more capable LLM running as Tem would be limited without self-grow infrastructure:
+Even a vastly more capable LLM running as Tem would be limited without cambium infrastructure:
 
-- **Without self-grow:** The LLM is brilliant but frozen in amber. It can orchestrate magnificently within existing tools but cannot add new ones. User asks for X → "I don't have that capability" → forever.
+- **Without cambium:** The LLM is brilliant but frozen in amber. It can orchestrate magnificently within existing tools but cannot add new ones. User asks for X → "I don't have that capability" → forever.
 
-- **With self-grow:** The LLM identifies the gap, reads the architecture, writes the tool, passes the pipeline, deploys. User asks for X → "Let me build that" → done.
+- **With cambium:** The LLM identifies the gap, reads the architecture, writes the tool, passes the pipeline, deploys. User asks for X → "Let me build that" → done.
 
 **Self-grow is the highway. The LLM is the car. Building the highway takes effort but it serves every car that ever drives on it — including ones that haven't been built yet.**
 
@@ -394,7 +411,7 @@ Even a vastly more capable LLM running as Tem would be limited without self-grow
 
 ### The Pipeline Stages
 
-Every self-grow session passes through these stages in order. Each stage is a binary gate: pass or fail. There is no "partial pass."
+Every cambium session passes through these stages in order. Each stage is a binary gate: pass or fail. There is no "partial pass."
 
 ```
 STAGE 0: TRIGGER VALIDATION
@@ -405,7 +422,7 @@ STAGE 0: TRIGGER VALIDATION
 
 STAGE 1: SELF-BRIEFING
   Input:  Validated growth intent
-  Action: Read docs/self-grow/ARCHITECTURE.md + relevant crate docs
+  Action: Read docs/cambium/ARCHITECTURE.md + relevant crate docs
   Check:  Does Tem understand the affected code paths?
   Output: Architecture-aware modification plan
   Fail:   Abort if understanding is insufficient. Report to user.
@@ -525,7 +542,7 @@ As test coverage increases, the pipeline's catch rate increases, which means the
 
 ### Blue-Green Binary Swap
 
-The running Tem binary must be replaced without losing state or conversations. This is the operational heart of self-grow.
+The running Tem binary must be replaced without losing state or conversations. This is the operational heart of Cambium.
 
 ```
 CURRENT STATE:
@@ -539,7 +556,7 @@ PHASE A — BUILD (isolated, no impact on running system)
   2. Apply code changes in worktree
   3. cargo build --release in worktree
   4. New binary: /tmp/temm1e-grow-<session-id>/target/release/temm1e
-  5. Copy to staging: ~/.temm1e/self-grow/staging/temm1e-next
+  5. Copy to staging: ~/.temm1e/cambium/staging/temm1e-next
 
 PHASE B — VERIFY (parallel, no impact on running system)
   6. Start staging binary on alternate port (8081) with test config
@@ -558,7 +575,7 @@ PHASE C — DRAIN (brief impact: no new conversations accepted)
 
 PHASE D — SWAP (downtime window: ~3-5 seconds)
   12. Stop running binary (SIGTERM → graceful shutdown)
-  13. Archive old binary: ~/.temm1e/self-grow/rollback/temm1e-<version>
+  13. Archive old binary: ~/.temm1e/cambium/rollback/temm1e-<version>
   14. Move staging binary to production path
   15. Start new binary on port 8080
   16. New binary loads state from SQLite
@@ -577,7 +594,7 @@ PHASE E — MONITOR (5-minute watchdog window)
   22. After 5 minutes with all checks passing:
       - Mark change as DEPLOYED
       - Clean up staging/
-      - Update self-grow history
+      - Update cambium history
 
 TOTAL DOWNTIME: ~3-5 seconds (Phase D only)
 ```
@@ -687,12 +704,12 @@ Tem reads this directory before every growth session. It provides:
 ### Structure
 
 ```
-docs/lab/self-grow/
+docs/lab/cambium/
 ├── THEORY.md              ← you are here (foundational principles)
 ├── ARCHITECTURE.md        ← crate map, message flow, dependency graph
 ├── PROTECTED_ZONES.md     ← Level 0/1/2/3 file lists with checksums
 ├── TRAIT_CONTRACTS.md     ← every trait, its methods, its invariants
-├── CODING_STANDARDS.md    ← rules self-grown code must follow
+├── CODING_STANDARDS.md    ← rules cambiumn code must follow
 ├── PIPELINE.md            ← verification stages with pass/fail criteria
 ├── CAPABILITY_REGISTRY.md ← what Tem can currently do (auto-updated)
 ├── HISTORY.md             ← log of all growth sessions and outcomes
@@ -722,11 +739,11 @@ If the self-model is stale, Tem is operating on outdated information. Auto-sync 
 Create the theoretical foundation and codebase self-model. Zero code changes. Zero risk.
 
 Deliverables:
-- `docs/lab/self-grow/THEORY.md` (this file)
-- `docs/lab/self-grow/ARCHITECTURE.md`
-- `docs/lab/self-grow/PROTECTED_ZONES.md`
-- `docs/lab/self-grow/TRAIT_CONTRACTS.md`
-- `docs/lab/self-grow/CODING_STANDARDS.md`
+- `docs/lab/cambium/THEORY.md` (this file)
+- `docs/lab/cambium/ARCHITECTURE.md`
+- `docs/lab/cambium/PROTECTED_ZONES.md`
+- `docs/lab/cambium/TRAIT_CONTRACTS.md`
+- `docs/lab/cambium/CODING_STANDARDS.md`
 
 ### Phase 1: Skill-Layer Growth
 
@@ -740,12 +757,12 @@ Deliverables:
 
 Risk: Near zero. Bad skills are text files — delete and retry.
 
-### Phase 2: The Self-Grow Pipeline
+### Phase 2: The Cambium Pipeline
 
-Build `temm1e-self-grow` crate. Implement Stages 0-9 of the verification pipeline. Growth sessions produce committed code on a branch but do NOT deploy.
+Build `temm1e-cambium` crate. Implement Stages 0-9 of the verification pipeline. Growth sessions produce committed code on a branch but do NOT deploy.
 
 Deliverables:
-- `temm1e-self-grow` crate (pipeline orchestration)
+- `temm1e-cambium` crate (pipeline orchestration)
 - CodeReviewer and SecurityAuditor core definitions
 - Protected zone enforcement with checksums
 - Trust level state machine
@@ -797,17 +814,17 @@ Risk: Medium. New runtime dependency (wasmtime), but sandboxed.
 
 These require further thinking before implementation:
 
-1. **How does self-grow interact with multiple users?** If User A needs feature X and User B doesn't, should the growth apply globally? What about conflicting preferences?
+1. **How does cambium interact with multiple users?** If User A needs feature X and User B doesn't, should the growth apply globally? What about conflicting preferences?
 
-2. **How does self-grow handle multi-crate changes?** If a new tool requires changes to both `temm1e-tools` and `temm1e-agent`, and one is Level 2 (autonomous) while the other is Level 1 (approval required), what happens? Current answer: the entire change inherits the highest trust level required.
+2. **How does cambium handle multi-crate changes?** If a new tool requires changes to both `temm1e-tools` and `temm1e-agent`, and one is Level 2 (autonomous) while the other is Level 1 (approval required), what happens? Current answer: the entire change inherits the highest trust level required.
 
-3. **Should self-grow changes be merged into main?** Or should they live on a separate branch that the production binary runs from? If separate branch, how do we prevent divergence from upstream development?
+3. **Should cambium changes be merged into main?** Or should they live on a separate branch that the production binary runs from? If separate branch, how do we prevent divergence from upstream development?
 
 4. **What is the right session budget?** Max lines, max files, max tokens — these need empirical tuning. Start conservative, adjust based on observed failure rates.
 
 5. **Should Tem explain its growth decisions in natural language?** Before growing, should it tell the user "I noticed you asked for X and I couldn't do it. I'm going to add a tool for that. Here's my plan: ..." This adds cost (LLM call) but dramatically improves trust and transparency.
 
-6. **How does self-grow interact with manual development?** When a human developer pushes code, the codebase changes. Does self-grow need to re-read the self-model? How does it handle merge conflicts between its changes and human changes?
+6. **How does cambium interact with manual development?** When a human developer pushes code, the codebase changes. Does cambium need to re-read the self-model? How does it handle merge conflicts between its changes and human changes?
 
 7. **What happens when the LLM provider is down?** Self-grow requires LLM calls. If the provider is unavailable, growth is impossible. Should there be a fallback provider? Or simply queue the trigger and retry later?
 

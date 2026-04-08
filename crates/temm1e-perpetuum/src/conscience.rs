@@ -50,8 +50,8 @@ pub enum SelfWorkKind {
     BlueprintRefinement,
     Vigil,
     /// Self-grow at the skill layer: analyze recent activity for unmet
-    /// needs, then write reusable skill files. Requires `self_grow.enabled = true`.
-    SelfGrowSkills,
+    /// needs, then write reusable skill files. Requires `cambium.enabled = true`.
+    CambiumSkills,
 }
 
 impl SelfWorkKind {
@@ -63,14 +63,14 @@ impl SelfWorkKind {
             Self::SessionCleanup => "session_cleanup",
             Self::BlueprintRefinement => "blueprint_refinement",
             Self::Vigil => "vigil",
-            Self::SelfGrowSkills => "self_grow_skills",
+            Self::CambiumSkills => "cambium_skills",
         }
     }
 
     pub fn uses_llm(&self) -> bool {
         matches!(
             self,
-            Self::FailureAnalysis | Self::LogIntrospection | Self::Vigil | Self::SelfGrowSkills
+            Self::FailureAnalysis | Self::LogIntrospection | Self::Vigil | Self::CambiumSkills
         )
     }
 }

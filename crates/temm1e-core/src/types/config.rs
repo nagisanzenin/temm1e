@@ -75,7 +75,7 @@ pub struct Temm1eConfig {
     #[serde(default)]
     pub social: SocialConfig,
     #[serde(default)]
-    pub self_grow: SelfGrowConfig,
+    pub cambium: CambiumConfig,
 }
 
 /// Social intelligence configuration — user profiling and emotional intelligence.
@@ -116,23 +116,32 @@ impl Default for SocialConfig {
     }
 }
 
-/// Self-grow configuration — gap-driven code evolution.
-/// Disabled by default. When disabled, self-grow has zero runtime cost.
+/// Cambium configuration — gap-driven code evolution.
+///
+/// Cambium is the layer where Tem grows new capabilities at the edge while
+/// the heartwood (immutable kernel) stays stable. Named after the biological
+/// cambium — the thin layer of growth tissue under tree bark where new wood
+/// is added each year.
+///
+/// **Enabled by default.** Users can opt out via `/cambium off` slash
+/// command at runtime, or set `enabled = false` in `[cambium]` section of
+/// the config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SelfGrowConfig {
-    /// Master switch. When false, no self-grow activity occurs.
-    #[serde(default)]
+pub struct CambiumConfig {
+    /// Master switch. When false, no cambium activity occurs.
+    /// Default: true (enabled).
+    #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Maximum lines of code changed per self-grow session.
+    /// Maximum lines of code changed per cambium session.
     #[serde(default = "default_sg_max_lines")]
     pub max_lines_per_session: usize,
-    /// Maximum files touched per self-grow session.
+    /// Maximum files touched per cambium session.
     #[serde(default = "default_sg_max_files")]
     pub max_files_per_session: usize,
-    /// Maximum self-grow sessions per 24-hour period.
+    /// Maximum cambium sessions per 24-hour period.
     #[serde(default = "default_sg_max_sessions")]
     pub max_sessions_per_day: usize,
-    /// Cooldown in seconds between self-grow sessions.
+    /// Cooldown in seconds between cambium sessions.
     #[serde(default = "default_sg_cooldown")]
     pub cooldown_secs: u64,
     /// Cooldown in seconds after a failed session.
@@ -162,13 +171,13 @@ fn default_sg_failure_cooldown() -> u64 {
     86400
 }
 fn default_sg_self_model_path() -> String {
-    "docs/lab/self-grow".to_string()
+    "docs/lab/cambium".to_string()
 }
 
-impl Default for SelfGrowConfig {
+impl Default for CambiumConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             max_lines_per_session: default_sg_max_lines(),
             max_files_per_session: default_sg_max_files(),
             max_sessions_per_day: default_sg_max_sessions(),
@@ -1117,7 +1126,7 @@ mod tests {
             perpetuum: PerpetualConfig::default(),
             vigil: VigilConfig::default(),
             social: SocialConfig::default(),
-            self_grow: SelfGrowConfig::default(),
+            cambium: CambiumConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -1443,48 +1452,59 @@ mod tests {
         assert_eq!(config.tools.browser_timeout_secs, 0);
     }
 
-    // ── Self-Grow Config tests ──────────────────────────────────────────
+    // ── Cambium Config tests ──────────────────────────────────────────
 
     #[test]
-    fn self_grow_config_default_is_disabled() {
-        let config = SelfGrowConfig::default();
-        assert!(!config.enabled);
+    fn cambium_config_default_is_enabled() {
+        let config = CambiumConfig::default();
+        assert!(config.enabled, "Cambium should be enabled by default");
         assert_eq!(config.max_lines_per_session, 500);
         assert_eq!(config.max_files_per_session, 5);
         assert_eq!(config.max_sessions_per_day, 3);
         assert_eq!(config.cooldown_secs, 3600);
         assert_eq!(config.failure_cooldown_secs, 86400);
         assert!(config.trust_level_override.is_none());
-        assert_eq!(config.self_model_path, "docs/lab/self-grow");
+        assert_eq!(config.self_model_path, "docs/lab/cambium");
     }
 
     #[test]
-    fn config_without_self_grow_section_parses() {
+    fn config_without_cambium_section_defaults_to_enabled() {
         let toml_str = r#"
             [gateway]
             port = 8080
         "#;
         let config: Temm1eConfig = toml::from_str(toml_str).unwrap();
-        assert!(!config.self_grow.enabled);
-        assert_eq!(config.self_grow.max_lines_per_session, 500);
+        // No [cambium] section -> defaults apply -> enabled = true
+        assert!(config.cambium.enabled);
+        assert_eq!(config.cambium.max_lines_per_session, 500);
     }
 
     #[test]
-    fn config_with_self_grow_section_parses() {
+    fn config_can_explicitly_disable_cambium() {
         let toml_str = r#"
-            [self_grow]
+            [cambium]
+            enabled = false
+        "#;
+        let config: Temm1eConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.cambium.enabled);
+    }
+
+    #[test]
+    fn config_with_cambium_section_parses() {
+        let toml_str = r#"
+            [cambium]
             enabled = true
             max_lines_per_session = 200
         "#;
         let config: Temm1eConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.self_grow.enabled);
-        assert_eq!(config.self_grow.max_lines_per_session, 200);
-        assert_eq!(config.self_grow.max_sessions_per_day, 3);
+        assert!(config.cambium.enabled);
+        assert_eq!(config.cambium.max_lines_per_session, 200);
+        assert_eq!(config.cambium.max_sessions_per_day, 3);
     }
 
     #[test]
-    fn self_grow_config_serde_roundtrip() {
-        let config = SelfGrowConfig {
+    fn cambium_config_serde_roundtrip() {
+        let config = CambiumConfig {
             enabled: true,
             max_lines_per_session: 300,
             max_files_per_session: 10,
@@ -1492,10 +1512,10 @@ mod tests {
             cooldown_secs: 1800,
             failure_cooldown_secs: 43200,
             trust_level_override: Some("approval_required".to_string()),
-            self_model_path: "docs/self-grow".to_string(),
+            self_model_path: "docs/cambium".to_string(),
         };
         let toml_str = toml::to_string(&config).unwrap();
-        let restored: SelfGrowConfig = toml::from_str(&toml_str).unwrap();
+        let restored: CambiumConfig = toml::from_str(&toml_str).unwrap();
         assert!(restored.enabled);
         assert_eq!(restored.max_lines_per_session, 300);
         assert_eq!(

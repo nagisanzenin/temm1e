@@ -1,13 +1,13 @@
 //! Trust state machine.
 //!
-//! Tracks earned trust from a track record of successful self-grow sessions.
+//! Tracks earned trust from a track record of successful cambium sessions.
 //! Trust is graduated per-level: Level 3 (basic autonomous) graduates first
 //! after 10 consecutive successes, Level 2 (full autonomous) after 25.
 //! Failures reset streaks and accumulate rollbacks; 3+ rollbacks force all
 //! levels back to approval-required.
 
 use chrono::{DateTime, Utc};
-use temm1e_core::types::self_grow::{TrustLevel, TrustState};
+use temm1e_core::types::cambium::{TrustLevel, TrustState};
 
 /// The trust engine manages the `TrustState` and enforces trust transitions,
 /// cooldowns, and daily limits.
@@ -40,7 +40,7 @@ impl TrustEngine {
                     self.state.level3_autonomous = true;
                     tracing::info!(
                         streak = self.state.level3_streak,
-                        "self-grow trust: Level 3 graduated to autonomous"
+                        "cambium trust: Level 3 graduated to autonomous"
                     );
                 }
             }
@@ -50,7 +50,7 @@ impl TrustEngine {
                     self.state.level2_autonomous = true;
                     tracing::info!(
                         streak = self.state.level2_streak,
-                        "self-grow trust: Level 2 graduated to autonomous"
+                        "cambium trust: Level 2 graduated to autonomous"
                     );
                 }
             }
@@ -73,7 +73,7 @@ impl TrustEngine {
             self.state.all_approval_required = true;
             tracing::warn!(
                 rollbacks = self.state.recent_rollbacks,
-                "self-grow trust: too many rollbacks, all levels set to approval-required"
+                "cambium trust: too many rollbacks, all levels set to approval-required"
             );
         }
     }

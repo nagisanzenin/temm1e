@@ -11,7 +11,7 @@
 //!
 //! ## Why a separate binary
 //!
-//! This is the **immutable kernel** part of self-grow. The watchdog never
+//! This is the **immutable kernel** part of Cambium. The watchdog never
 //! self-modifies. Even if the temm1e binary is replaced by a buggy version,
 //! the watchdog continues running with its original code and can restore
 //! service.

@@ -1,8 +1,8 @@
-# Self-Grow: Implementation Plan
+# Cambium: Implementation Plan
 
 > **Status:** Pre-implementation — research complete, awaiting confidence gate  
 > **Date:** 2026-04-08  
-> **Branch:** `self-growing`  
+> **Branch:** `cambiuming`  
 > **Prerequisite:** THEORY.md (approved)  
 > **Rule:** NO CODE until all research items for a phase show GREEN
 
@@ -26,7 +26,7 @@ Phase 0 ─── docs only, zero code
 Phase 1 ─── types + config (disabled by default)
   │
   v
-Phase 2 ─── temm1e-self-grow crate (library, no callers)
+Phase 2 ─── temm1e-cambium crate (library, no callers)
   │
   v
 Phase 3 ─── skill-layer growth (first integration)
@@ -51,11 +51,11 @@ Pure documentation. Zero code files modified.
 
 | File | Purpose |
 |------|---------|
-| `docs/lab/self-grow/THEORY.md` | Foundational theory (DONE) |
-| `docs/lab/self-grow/IMPLEMENTATION_PLAN.md` | This file |
-| `docs/lab/self-grow/ARCHITECTURE.md` | Crate map, dependency graph, message flow |
-| `docs/lab/self-grow/PROTECTED_ZONES.md` | Level 0/1/2/3 file lists with SHA-256 checksums |
-| `docs/lab/self-grow/CODING_STANDARDS.md` | Rules self-grown code must follow |
+| `docs/lab/cambium/THEORY.md` | Foundational theory (DONE) |
+| `docs/lab/cambium/IMPLEMENTATION_PLAN.md` | This file |
+| `docs/lab/cambium/ARCHITECTURE.md` | Crate map, dependency graph, message flow |
+| `docs/lab/cambium/PROTECTED_ZONES.md` | Level 0/1/2/3 file lists with SHA-256 checksums |
+| `docs/lab/cambium/CODING_STANDARDS.md` | Rules cambiumn code must follow |
 
 ### Risk Assessment
 **ZERO.** No code changes. No compilation. No behavior change.
@@ -64,7 +64,7 @@ Pure documentation. Zero code files modified.
 
 | # | Metric | Verification Command |
 |---|--------|---------------------|
-| 0.1 | All 5 docs exist | `ls docs/lab/self-grow/*.md \| wc -l` = 5 |
+| 0.1 | All 5 docs exist | `ls docs/lab/cambium/*.md \| wc -l` = 5 |
 | 0.2 | PROTECTED_ZONES.md lists every Level 0 file with SHA-256 | Manual review |
 | 0.3 | ARCHITECTURE.md crate list matches `Cargo.toml` workspace members | Diff check |
 | 0.4 | No code files modified | `git diff --name-only \| grep -v docs/` = empty |
@@ -77,7 +77,7 @@ Pure documentation. Zero code files modified.
 ## Phase 1: Foundation Types & Config
 
 ### What Changes
-Add `SelfGrowConfig` struct to config and self-grow types to `temm1e-core`. All behind `#[serde(default)]` with `enabled: false`. **Zero behavior change** — the system parses the config section if present, ignores it otherwise.
+Add `CambiumConfig` struct to config and cambium types to `temm1e-core`. All behind `#[serde(default)]` with `enabled: false`. **Zero behavior change** — the system parses the config section if present, ignores it otherwise.
 
 ### Exact File Changes
 
@@ -86,27 +86,27 @@ Add `SelfGrowConfig` struct to config and self-grow types to `temm1e-core`. All 
 Add after the existing `SocialConfig` block (~line 500+):
 
 ```rust
-/// Configuration for self-grow capability.
-/// Disabled by default. When disabled, self-grow has zero runtime cost.
+/// Configuration for cambium capability.
+/// Disabled by default. When disabled, cambium has zero runtime cost.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SelfGrowConfig {
-    /// Master switch. When false, no self-grow activity occurs.
+pub struct CambiumConfig {
+    /// Master switch. When false, no cambium activity occurs.
     #[serde(default)]
     pub enabled: bool,
 
-    /// Maximum lines of code changed per self-grow session.
+    /// Maximum lines of code changed per cambium session.
     #[serde(default = "default_max_lines_per_session")]
     pub max_lines_per_session: usize,
 
-    /// Maximum files touched per self-grow session.
+    /// Maximum files touched per cambium session.
     #[serde(default = "default_max_files_per_session")]
     pub max_files_per_session: usize,
 
-    /// Maximum self-grow sessions per 24-hour period.
+    /// Maximum cambium sessions per 24-hour period.
     #[serde(default = "default_max_sessions_per_day")]
     pub max_sessions_per_day: usize,
 
-    /// Cooldown in seconds between self-grow sessions.
+    /// Cooldown in seconds between cambium sessions.
     #[serde(default = "default_cooldown_secs")]
     pub cooldown_secs: u64,
 
@@ -129,9 +129,9 @@ fn default_max_files_per_session() -> usize { 5 }
 fn default_max_sessions_per_day() -> usize { 3 }
 fn default_cooldown_secs() -> u64 { 3600 }        // 1 hour
 fn default_failure_cooldown_secs() -> u64 { 86400 } // 24 hours
-fn default_self_model_path() -> String { "docs/lab/self-grow".to_string() }
+fn default_self_model_path() -> String { "docs/lab/cambium".to_string() }
 
-impl Default for SelfGrowConfig {
+impl Default for CambiumConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -151,16 +151,16 @@ Add field to `Temm1eConfig` struct (after `social: SocialConfig`):
 
 ```rust
 #[serde(default)]
-pub self_grow: SelfGrowConfig,
+pub cambium: CambiumConfig,
 ```
 
 **File 2: `crates/temm1e-core/src/types/mod.rs`**
 
 No change needed — config.rs is already exported.
 
-### New File: `crates/temm1e-core/src/types/self_grow.rs`
+### New File: `crates/temm1e-core/src/types/cambium.rs`
 
-Core types for the self-grow system (used by the pipeline crate later):
+Core types for the cambium system (used by the pipeline crate later):
 
 ```rust
 use chrono::{DateTime, Utc};
@@ -195,7 +195,7 @@ pub enum GrowthKind {
 /// Trust level for a specific modification scope.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TrustLevel {
-    /// Level 0: Immutable. Cannot be modified by self-grow.
+    /// Level 0: Immutable. Cannot be modified by cambium.
     Immutable = 0,
     /// Level 1: Requires explicit human approval before commit.
     ApprovalRequired = 1,
@@ -231,7 +231,7 @@ pub enum PipelineStage {
     PostDeployMonitoring,
 }
 
-/// A complete record of one self-grow session.
+/// A complete record of one cambium session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrowthSession {
     pub id: String,
@@ -313,8 +313,8 @@ impl Default for TrustState {
 
 ### Why This Is Zero Risk
 
-1. `SelfGrowConfig` has `#[serde(default)]` on the parent field AND `enabled: false` as default. If `[self_grow]` is absent from TOML, the struct deserializes to disabled. No behavior change.
-2. `self_grow.rs` types are pure data definitions. They have no methods with side effects. They are imported by nothing until Phase 2.
+1. `CambiumConfig` has `#[serde(default)]` on the parent field AND `enabled: false` as default. If `[cambium]` is absent from TOML, the struct deserializes to disabled. No behavior change.
+2. `cambium.rs` types are pure data definitions. They have no methods with side effects. They are imported by nothing until Phase 2.
 3. No existing code paths are modified. No function signatures change.
 4. No new dependencies added.
 
@@ -328,9 +328,9 @@ impl Default for TrustState {
 | 1.1 | `cargo check --workspace` passes | Run command, exit code 0 |
 | 1.2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes | Run command, exit code 0 |
 | 1.3 | `cargo test --workspace` — all existing tests pass, zero new failures | Run command, compare test count |
-| 1.4 | `SelfGrowConfig::default().enabled == false` | Unit test |
-| 1.5 | Existing `temm1e.toml` without `[self_grow]` parses correctly | Unit test |
-| 1.6 | `temm1e.toml` with `[self_grow]\nenabled = true` parses correctly | Unit test |
+| 1.4 | `CambiumConfig::default().enabled == false` | Unit test |
+| 1.5 | Existing `temm1e.toml` without `[cambium]` parses correctly | Unit test |
+| 1.6 | `temm1e.toml` with `[cambium]\nenabled = true` parses correctly | Unit test |
 | 1.7 | All `GrowthTrigger`, `GrowthKind`, `TrustLevel` variants serialize/deserialize roundtrip | Unit test |
 | 1.8 | `TrustState::default()` has all streaks at 0, autonomous = false | Unit test |
 
@@ -342,35 +342,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn self_grow_config_default_is_disabled() {
-        let config = SelfGrowConfig::default();
+    fn cambium_config_default_is_disabled() {
+        let config = CambiumConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.max_lines_per_session, 500);
         assert_eq!(config.max_sessions_per_day, 3);
     }
 
     #[test]
-    fn config_without_self_grow_section_parses() {
+    fn config_without_cambium_section_parses() {
         let toml_str = r#"
             [gateway]
             port = 8080
         "#;
         let config: Temm1eConfig = toml::from_str(toml_str).unwrap();
-        assert!(!config.self_grow.enabled);
+        assert!(!config.cambium.enabled);
     }
 
     #[test]
-    fn config_with_self_grow_section_parses() {
+    fn config_with_cambium_section_parses() {
         let toml_str = r#"
-            [self_grow]
+            [cambium]
             enabled = true
             max_lines_per_session = 200
         "#;
         let config: Temm1eConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.self_grow.enabled);
-        assert_eq!(config.self_grow.max_lines_per_session, 200);
+        assert!(config.cambium.enabled);
+        assert_eq!(config.cambium.max_lines_per_session, 200);
         // Other fields use defaults
-        assert_eq!(config.self_grow.max_sessions_per_day, 3);
+        assert_eq!(config.cambium.max_sessions_per_day, 3);
     }
 
     #[test]
@@ -406,18 +406,18 @@ mod tests {
 
 ---
 
-## Phase 2: `temm1e-self-grow` Crate (Library Only)
+## Phase 2: `temm1e-cambium` Crate (Library Only)
 
 ### What Changes
-Create a new crate `temm1e-self-grow` with the pipeline logic, zone checker, trust state machine, and session history. **Not wired to any caller.** Pure library with unit tests.
+Create a new crate `temm1e-cambium` with the pipeline logic, zone checker, trust state machine, and session history. **Not wired to any caller.** Pure library with unit tests.
 
 ### Why This Is Zero Risk
-The crate exists in the workspace but nothing imports it. `cargo build` compiles it. `cargo test -p temm1e-self-grow` tests it. No existing code references it. It could be deleted with zero impact.
+The crate exists in the workspace but nothing imports it. `cargo build` compiles it. `cargo test -p temm1e-cambium` tests it. No existing code references it. It could be deleted with zero impact.
 
 ### Crate Structure
 
 ```
-crates/temm1e-self-grow/
+crates/temm1e-cambium/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              — Public API surface
@@ -439,7 +439,7 @@ crates/temm1e-self-grow/
 
 ```toml
 [package]
-name = "temm1e-self-grow"
+name = "temm1e-cambium"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -471,7 +471,7 @@ tempfile = "3"
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use temm1e_core::types::self_grow::TrustLevel;
+use temm1e_core::types::cambium::TrustLevel;
 
 /// Loaded from PROTECTED_ZONES.md — maps file paths to trust levels.
 pub struct ZoneManifest {
@@ -482,7 +482,7 @@ pub struct ZoneManifest {
 }
 
 impl ZoneManifest {
-    /// Load from docs/lab/self-grow/PROTECTED_ZONES.md
+    /// Load from docs/lab/cambium/PROTECTED_ZONES.md
     pub fn load(self_model_path: &Path) -> Result<Self, ...>;
 
     /// Validate that no Level 0 files have been modified.
@@ -510,7 +510,7 @@ impl ZoneManifest {
 #### `trust.rs` — Trust State Machine
 
 ```rust
-use temm1e_core::types::self_grow::{TrustLevel, TrustState};
+use temm1e_core::types::cambium::{TrustLevel, TrustState};
 use chrono::{DateTime, Utc};
 
 pub struct TrustEngine {
@@ -624,7 +624,7 @@ impl GrowthHistory {
 **SQLite schema:**
 
 ```sql
-CREATE TABLE IF NOT EXISTS self_grow_sessions (
+CREATE TABLE IF NOT EXISTS cambium_sessions (
     id TEXT PRIMARY KEY,
     trigger_json TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -640,14 +640,14 @@ CREATE TABLE IF NOT EXISTS self_grow_sessions (
     cost_usd REAL NOT NULL DEFAULT 0.0
 );
 
-CREATE TABLE IF NOT EXISTS self_grow_trust_state (
+CREATE TABLE IF NOT EXISTS cambium_trust_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     state_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_started ON self_grow_sessions(started_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_outcome ON self_grow_sessions(outcome_json);
+CREATE INDEX IF NOT EXISTS idx_sessions_started ON cambium_sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_outcome ON cambium_sessions(outcome_json);
 ```
 
 **Test cases:**
@@ -667,13 +667,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_outcome ON self_grow_sessions(outcome_js
 | 2.1 | `cargo check --workspace` passes | Run command |
 | 2.2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes | Run command |
 | 2.3 | `cargo test --workspace` — all existing tests still pass | Run command |
-| 2.4 | `cargo test -p temm1e-self-grow` — all new tests pass | Run command |
+| 2.4 | `cargo test -p temm1e-cambium` — all new tests pass | Run command |
 | 2.5 | Zone checker catches Level 0 modifications | Test case |
 | 2.6 | Trust engine graduates after correct streaks | Test case |
 | 2.7 | Trust engine demotes after failure | Test case |
 | 2.8 | Budget enforcer rejects over-budget diffs | Test case |
 | 2.9 | History roundtrips through SQLite | Test case |
-| 2.10 | No existing crate imports `temm1e-self-grow` | `grep -r "temm1e.self.grow" crates/ --include Cargo.toml` = only self |
+| 2.10 | No existing crate imports `temm1e-cambium` | `grep -r "temm1e.self.grow" crates/ --include Cargo.toml` = only self |
 
 ### Rollback
 Remove the crate directory and its entry from `Cargo.toml` workspace members. `git revert`. Zero impact.
@@ -687,7 +687,7 @@ This is the first phase where Tem actually DOES something new at runtime. But th
 
 Three integration points:
 1. **SkillRegistry gets a `reload()` method** — so Tem can create a skill and load it without restart
-2. **SelfWorkKind gets a `SelfGrowSkills` variant** — Perpetuum can schedule skill growth
+2. **SelfWorkKind gets a `CambiumSkills` variant** — Perpetuum can schedule skill growth
 3. **A new self_work handler** in `temm1e-perpetuum/src/self_work.rs` — the actual skill creation logic
 
 ### Exact File Changes
@@ -697,7 +697,7 @@ Three integration points:
 Add public method to SkillRegistry (~after line 98):
 
 ```rust
-/// Reload all skills from disk. Called by self-grow after writing new skill files.
+/// Reload all skills from disk. Called by cambium after writing new skill files.
 /// Safe to call at runtime — clears and re-scans both directories.
 pub async fn reload(&mut self) -> Result<usize, Temm1eError> {
     self.load_skills().await?;
@@ -719,13 +719,13 @@ pub enum SelfWorkKind {
     SessionCleanup,
     BlueprintRefinement,
     Vigil,
-    SelfGrowSkills,  // NEW — skill-layer self-growth
+    CambiumSkills,  // NEW — skill-layer cambium growth
 }
 ```
 
 Update `name()` match:
 ```rust
-Self::SelfGrowSkills => "self_grow_skills",
+Self::CambiumSkills => "cambium_skills",
 ```
 
 Update `uses_llm()`:
@@ -733,7 +733,7 @@ Update `uses_llm()`:
 pub fn uses_llm(&self) -> bool {
     matches!(
         self,
-        Self::FailureAnalysis | Self::LogIntrospection | Self::Vigil | Self::SelfGrowSkills
+        Self::FailureAnalysis | Self::LogIntrospection | Self::Vigil | Self::CambiumSkills
     )
 }
 ```
@@ -742,14 +742,14 @@ pub fn uses_llm(&self) -> bool {
 
 Add dispatch case (~line 435):
 ```rust
-"self_grow_skills" => SelfWorkKind::SelfGrowSkills,
+"cambium_skills" => SelfWorkKind::CambiumSkills,
 ```
 
 **File 4: `crates/temm1e-perpetuum/src/self_work.rs`**
 
 Add match arm in `execute_self_work()`:
 ```rust
-SelfWorkKind::SelfGrowSkills => {
+SelfWorkKind::CambiumSkills => {
     if let Some(caller) = caller {
         grow_skills(store, caller).await
     } else {
@@ -761,7 +761,7 @@ SelfWorkKind::SelfGrowSkills => {
 Implement `grow_skills()` function (following Vigil pattern):
 
 ```rust
-/// Skill-layer self-growth: analyze recent interactions for unmet needs,
+/// Skill-layer cambium growth: analyze recent interactions for unmet needs,
 /// then generate skill files to address them.
 async fn grow_skills(
     store: &Arc<Store>,
@@ -769,8 +769,8 @@ async fn grow_skills(
 ) -> Result<String, Temm1eError> {
     // 1. Rate limit: max once per 24 hours
     let notes = store.get_volition_notes().await?;
-    if let Some(last) = notes.iter().find(|n| n.note.starts_with("skill_grow_last:")) {
-        if let Some(ts) = n.note.strip_prefix("skill_grow_last:") {
+    if let Some(last) = notes.iter().find(|n| n.note.starts_with("cambium_grow_last:")) {
+        if let Some(ts) = n.note.strip_prefix("cambium_grow_last:") {
             if let Ok(last_dt) = DateTime::parse_from_rfc3339(ts) {
                 let hours = (Utc::now() - last_dt.with_timezone(&Utc)).num_hours();
                 if hours < 24 {
@@ -807,7 +807,7 @@ async fn grow_skills(
     // 6. Record timestamp for rate limit
 
     store.save_volition_note(
-        &format!("skill_grow_last:{}", Utc::now().to_rfc3339()),
+        &format!("cambium_grow_last:{}", Utc::now().to_rfc3339()),
         "self_work",
     ).await?;
 
@@ -820,10 +820,10 @@ async fn grow_skills(
 This code only executes when:
 1. Perpetuum is enabled (config: `perpetuum.enabled = true`)
 2. Conscience enters Sleep state
-3. Sleep state's `work` field is `SelfGrowSkills`
-4. Conscience only selects `SelfGrowSkills` when `self_grow.enabled = true`
+3. Sleep state's `work` field is `CambiumSkills`
+4. Conscience only selects `CambiumSkills` when `cambium.enabled = true`
 
-Since `self_grow.enabled` defaults to `false`, this code is never reached unless explicitly enabled.
+Since `cambium.enabled` defaults to `false`, this code is never reached unless explicitly enabled.
 
 ### Risk Assessment
 **NEAR-ZERO.**
@@ -831,36 +831,36 @@ Since `self_grow.enabled` defaults to `false`, this code is never reached unless
 - A badly-written skill just produces bad instructions. The user says "that's wrong" and Tem learns.
 - Rate limited to once per 24 hours.
 - LLM call cost is bounded (single call per session).
-- If anything goes wrong, delete `~/.temm1e/skills/self-grow-*.md`.
+- If anything goes wrong, delete `~/.temm1e/skills/cambium-*.md`.
 
 ### Success Metrics
 
 | # | Metric | Verification |
 |---|--------|-------------|
 | 3.1 | All compilation gates pass | `cargo check && cargo clippy && cargo test` |
-| 3.2 | `SelfWorkKind::SelfGrowSkills` serializes/deserializes | Unit test |
+| 3.2 | `SelfWorkKind::CambiumSkills` serializes/deserializes | Unit test |
 | 3.3 | `SkillRegistry::reload()` returns correct count after adding a skill file | Unit test |
 | 3.4 | `grow_skills()` respects 24-hour rate limit | Unit test with mocked store |
 | 3.5 | `grow_skills()` writes valid skill files parseable by SkillRegistry | Integration test |
-| 3.6 | With `self_grow.enabled = false`, SelfGrowSkills never triggers | Integration test |
-| 3.7 | With `self_grow.enabled = true`, skill created and loadable | Integration test |
+| 3.6 | With `cambium.enabled = false`, CambiumSkills never triggers | Integration test |
+| 3.7 | With `cambium.enabled = true`, skill created and loadable | Integration test |
 | 3.8 | Created skill can be invoked via `use_skill` tool | End-to-end test |
 
 ### Rollback
-Revert the commits. Delete any `~/.temm1e/skills/self-grow-*.md` files. Zero state impact.
+Revert the commits. Delete any `~/.temm1e/skills/cambium-*.md` files. Zero state impact.
 
 ---
 
 ## Phase 4: Code Pipeline (Branch Only, No Deploy)
 
 ### What Changes
-Wire `temm1e-self-grow` pipeline to actually generate code changes. But changes are **committed to a git branch only** — never deployed, never merged automatically. The user reviews and merges manually.
+Wire `temm1e-cambium` pipeline to actually generate code changes. But changes are **committed to a git branch only** — never deployed, never merged automatically. The user reviews and merges manually.
 
-This is where Tem starts writing Rust code into its own codebase. But the safety net is: the code lives on a branch. If it's bad, `git branch -D self-grow/...`. Done.
+This is where Tem starts writing Rust code into its own codebase. But the safety net is: the code lives on a branch. If it's bad, `git branch -D cambium/...`. Done.
 
 ### Integration Points
 
-1. **New SelfWorkKind: `SelfGrowCode`** — Perpetuum triggers code growth
+1. **New SelfWorkKind: `CambiumCode`** — Perpetuum triggers code growth
 2. **Self-grow pipeline wired** — uses shell tool to run `cargo check/test/clippy`
 3. **TemDOS cores created** — `CodeReviewer.core` and `SecurityAuditor.core` definition files
 4. **Zone checker loaded** — reads PROTECTED_ZONES.md before every session
@@ -870,7 +870,7 @@ This is where Tem starts writing Rust code into its own codebase. But the safety
 
 **Code generation happens in a git worktree:**
 ```bash
-git worktree add /tmp/temm1e-grow-<session-id> -b self-grow/<date>-<description>
+git worktree add /tmp/temm1e-grow-<session-id> -b cambium/<date>-<description>
 # ... make changes in worktree ...
 # ... run cargo check/test in worktree ...
 git worktree remove /tmp/temm1e-grow-<session-id>
@@ -925,7 +925,7 @@ The only "risk" is wasted tokens if the LLM generates bad code. Bounded by sessi
 | 4.11 | Running binary is completely unaffected during pipeline | Health check passes throughout |
 
 ### Rollback
-Revert commits on main. Delete any `self-grow/*` branches. Zero state impact.
+Revert commits on main. Delete any `cambium/*` branches. Zero state impact.
 
 ---
 
@@ -998,7 +998,7 @@ Before coding ANY phase, ALL items must be GREEN:
 - [x] Test cases enumerated
 - [ ] Phase 0 success metrics ALL green
 
-### Phase 2 (temm1e-self-grow crate)
+### Phase 2 (temm1e-cambium crate)
 - [x] Cargo workspace member pattern researched
 - [x] SQLite schema designed
 - [x] Zone checker algorithm designed
@@ -1040,9 +1040,9 @@ After all phases complete:
 
 1. [ ] All compilation gates pass: `cargo check && cargo clippy && cargo test && cargo fmt --check`
 2. [ ] Test count increased (new crate tests + new integration tests)
-3. [ ] README updated: self-grow section with usage instructions
-4. [ ] Config example: `[self_grow]` section documented in example config
-5. [ ] docs/lab/self-grow/ complete: all schema files, session records
+3. [ ] README updated: cambium section with usage instructions
+4. [ ] Config example: `[cambium]` section documented in example config
+5. [ ] docs/lab/cambium/ complete: all schema files, session records
 6. [ ] 10-turn CLI conversation test passes
 7. [ ] Self-grow enabled, triggered, and produces a valid skill (Phase 3 demo)
 8. [ ] Self-grow enabled, triggered, and produces a valid code branch (Phase 4 demo)

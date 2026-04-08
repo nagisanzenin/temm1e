@@ -1,18 +1,18 @@
 //! Growth session history persistence.
 //!
-//! Stores self-grow sessions and trust state as JSON files on disk. Sessions
+//! Stores cambium sessions and trust state as JSON files on disk. Sessions
 //! are append-only in JSON-lines format (one session per line); trust state
 //! is stored as a single JSON object in a sibling file.
 //!
 //! This avoids a `sqlx` dependency for the pipeline crate. For a production
-//! deployment, the history file sits in `~/.temm1e/self-grow/` alongside
+//! deployment, the history file sits in `~/.temm1e/cambium/` alongside
 //! `history.jsonl` (sessions) and `trust_state.json` (current trust state).
 
 use std::path::{Path, PathBuf};
+use temm1e_core::types::cambium::{GrowthSession, TrustState};
 use temm1e_core::types::error::Temm1eError;
-use temm1e_core::types::self_grow::{GrowthSession, TrustState};
 
-/// Persistent history of self-grow sessions and trust state.
+/// Persistent history of cambium sessions and trust state.
 ///
 /// The `base_dir` contains two files:
 /// - `history.jsonl` -- append-only JSON-lines log of growth sessions
@@ -48,7 +48,7 @@ impl GrowthHistory {
                 .await
                 .map_err(|e| {
                     Temm1eError::Config(format!(
-                        "failed to create self-grow history dir {}: {}",
+                        "failed to create cambium history dir {}: {}",
                         self.base_dir.display(),
                         e
                     ))
@@ -72,7 +72,7 @@ impl GrowthHistory {
         let existing = if path.exists() {
             tokio::fs::read(&path).await.map_err(|e| {
                 Temm1eError::Tool(format!(
-                    "failed to read self-grow history at {}: {}",
+                    "failed to read cambium history at {}: {}",
                     path.display(),
                     e
                 ))
@@ -86,7 +86,7 @@ impl GrowthHistory {
 
         tokio::fs::write(&path, combined).await.map_err(|e| {
             Temm1eError::Tool(format!(
-                "failed to write self-grow history at {}: {}",
+                "failed to write cambium history at {}: {}",
                 path.display(),
                 e
             ))
@@ -95,7 +95,7 @@ impl GrowthHistory {
         tracing::debug!(
             id = %session.id,
             path = %path.display(),
-            "self-grow: session saved"
+            "cambium: session saved"
         );
 
         Ok(())
@@ -114,7 +114,7 @@ impl GrowthHistory {
 
         let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
             Temm1eError::Tool(format!(
-                "failed to read self-grow history at {}: {}",
+                "failed to read cambium history at {}: {}",
                 path.display(),
                 e
             ))
@@ -132,7 +132,7 @@ impl GrowthHistory {
                     tracing::warn!(
                         line_number = idx + 1,
                         error = %e,
-                        "self-grow: skipping malformed history line"
+                        "cambium: skipping malformed history line"
                     );
                 }
             }
@@ -157,7 +157,7 @@ impl GrowthHistory {
             ))
         })?;
 
-        tracing::debug!(path = %path.display(), "self-grow: trust state saved");
+        tracing::debug!(path = %path.display(), "cambium: trust state saved");
         Ok(())
     }
 
@@ -197,7 +197,7 @@ impl GrowthHistory {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use temm1e_core::types::self_grow::{
+    use temm1e_core::types::cambium::{
         GrowthKind, GrowthOutcome, GrowthTrigger, PipelineStage, StageResult,
     };
     use tempfile::tempdir;
@@ -215,7 +215,7 @@ mod tests {
             files_changed: vec!["skills/test.md".into()],
             lines_added: 5,
             lines_removed: 0,
-            git_branch: Some("self-grow/test".into()),
+            git_branch: Some("cambium/test".into()),
             git_commit: None,
             outcome: GrowthOutcome::InProgress,
             cost_usd: 0.001,
@@ -225,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn load_sessions_returns_empty_when_no_file() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
         let sessions = history.load_sessions().await.expect("load");
         assert!(sessions.is_empty());
     }
@@ -233,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn save_and_load_single_session_roundtrip() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
 
         let session = sample_session("s-001");
         history.save_session(&session).await.expect("save");
@@ -246,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn save_multiple_sessions_are_all_loaded() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
 
         for i in 0..5 {
             let session = sample_session(&format!("s-{:03}", i));
@@ -263,7 +263,7 @@ mod tests {
     #[tokio::test]
     async fn save_session_creates_base_dir() {
         let dir = tempdir().expect("tempdir");
-        let nested = dir.path().join("nested/deep/self-grow");
+        let nested = dir.path().join("nested/deep/cambium");
         let history = GrowthHistory::new(&nested);
 
         assert!(!nested.exists());
@@ -275,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn load_trust_state_returns_none_when_no_file() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
         let state = history.load_trust_state().await.expect("load");
         assert!(state.is_none());
     }
@@ -283,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn save_and_load_trust_state_roundtrip() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
 
         let state = TrustState {
             level3_streak: 5,
@@ -315,7 +315,7 @@ mod tests {
     #[tokio::test]
     async fn save_trust_state_overwrites_existing() {
         let dir = tempdir().expect("tempdir");
-        let history = GrowthHistory::new(dir.path().join("self-grow"));
+        let history = GrowthHistory::new(dir.path().join("cambium"));
 
         let mut state = TrustState {
             level3_streak: 5,
@@ -339,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_history_line_is_skipped() {
         let dir = tempdir().expect("tempdir");
-        let base = dir.path().join("self-grow");
+        let base = dir.path().join("cambium");
         tokio::fs::create_dir_all(&base).await.expect("mkdir");
 
         // Write two good lines and one malformed line.
@@ -359,7 +359,7 @@ mod tests {
     #[tokio::test]
     async fn empty_lines_in_history_are_ignored() {
         let dir = tempdir().expect("tempdir");
-        let base = dir.path().join("self-grow");
+        let base = dir.path().join("cambium");
         tokio::fs::create_dir_all(&base).await.expect("mkdir");
 
         let session = sample_session("s-001");
@@ -377,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn base_dir_accessor_returns_path() {
         let dir = tempdir().expect("tempdir");
-        let base = dir.path().join("self-grow");
+        let base = dir.path().join("cambium");
         let history = GrowthHistory::new(&base);
         assert_eq!(history.base_dir(), base.as_path());
     }
@@ -385,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_trust_state_file_returns_error() {
         let dir = tempdir().expect("tempdir");
-        let base = dir.path().join("self-grow");
+        let base = dir.path().join("cambium");
         tokio::fs::create_dir_all(&base).await.expect("mkdir");
         tokio::fs::write(base.join("trust_state.json"), b"{not-valid-json")
             .await

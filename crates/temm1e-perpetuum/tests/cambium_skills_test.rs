@@ -1,12 +1,12 @@
-//! Live verification of Phase 3: skill-layer self-growth.
+//! Live verification of Phase 3: skill-layer cambium growth.
 //!
 //! This is the end-to-end proof that the grow_skills() loop works:
 //!
 //!   1. Synthetic activity is recorded in the Perpetuum store
 //!   2. A mock LlmCaller returns a fixed JSON skill suggestion
-//!   3. execute_self_work() is invoked with SelfWorkKind::SelfGrowSkills
-//!   4. We verify a self-grow-*.md file is written to a controlled tempdir
-//!      (via the TEMM1E_SELF_GROW_SKILLS_DIR env var override)
+//!   3. execute_self_work() is invoked with SelfWorkKind::CambiumSkills
+//!   4. We verify a cambium-*.md file is written to a controlled tempdir
+//!      (via the TEMM1E_CAMBIUM_SKILLS_DIR env var override)
 //!   5. We verify the file is parseable by SkillRegistry
 //!   6. We verify the rate-limit timestamp is recorded
 //!   7. A second invocation within 24h is rate-limited
@@ -93,7 +93,7 @@ async fn grow_skills_writes_valid_skill_file() {
     // Setup: tempdir for skills output
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     // Setup: store with 5 activity notes simulating a recurring user need
     let store = store_with_activity(&[
@@ -118,7 +118,7 @@ async fn grow_skills_writes_valid_skill_file() {
 
     // Run: execute the self-work
     let started = std::time::Instant::now();
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller)).await;
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller)).await;
     let elapsed = started.elapsed();
 
     // Verify: result is OK and reports a written skill
@@ -132,7 +132,7 @@ async fn grow_skills_writes_valid_skill_file() {
     );
 
     // Verify: skill file exists at expected path
-    let expected_path = skills_dir.join("self-grow-kubernetes-monitoring.md");
+    let expected_path = skills_dir.join("cambium-kubernetes-monitoring.md");
     assert!(
         expected_path.exists(),
         "skill file not created at {}",
@@ -188,7 +188,7 @@ async fn grow_skills_rate_limits_subsequent_calls() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = store_with_activity(&["first activity", "second activity", "third activity"]).await;
 
@@ -196,14 +196,14 @@ async fn grow_skills_rate_limits_subsequent_calls() {
     let caller: Arc<dyn LlmCaller> = Arc::new(MockCaller::new(mock_response));
 
     // First call: should run, record timestamp
-    let r1 = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller))
+    let r1 = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller))
         .await
         .unwrap();
     println!("Call 1: {r1}");
     assert!(r1.contains("no skill opportunities") || r1.contains("wrote"));
 
     // Second call: should be rate-limited
-    let r2 = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller))
+    let r2 = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller))
         .await
         .unwrap();
     println!("Call 2: {r2}");
@@ -215,12 +215,12 @@ async fn grow_skills_with_no_activity_returns_early() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = Arc::new(Store::new("sqlite::memory:").await.unwrap());
     let caller: Arc<dyn LlmCaller> = Arc::new(MockCaller::new("[]"));
 
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller))
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller))
         .await
         .unwrap();
     println!("Result: {result}");
@@ -235,14 +235,14 @@ async fn grow_skills_with_unparseable_llm_response_skips_gracefully() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = store_with_activity(&["some activity"]).await;
 
     // Garbage LLM response
     let caller: Arc<dyn LlmCaller> = Arc::new(MockCaller::new("not json at all 🤷"));
 
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller)).await;
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller)).await;
     assert!(result.is_ok());
     let summary = result.unwrap();
     println!("Result: {summary}");
@@ -257,7 +257,7 @@ async fn grow_skills_writes_multiple_skills_in_one_session() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = store_with_activity(&["user wanted X", "user wanted Y", "user wanted Z"]).await;
 
@@ -277,7 +277,7 @@ async fn grow_skills_writes_multiple_skills_in_one_session() {
     ]"#;
     let caller: Arc<dyn LlmCaller> = Arc::new(MockCaller::new(mock_response));
 
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller))
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller))
         .await
         .unwrap();
     println!("Result: {result}");
@@ -298,8 +298,8 @@ async fn grow_skills_writes_multiple_skills_in_one_session() {
         .iter()
         .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
         .collect();
-    assert!(names.contains(&"self-grow-skill-one.md".to_string()));
-    assert!(names.contains(&"self-grow-skill-two.md".to_string()));
+    assert!(names.contains(&"cambium-skill-one.md".to_string()));
+    assert!(names.contains(&"cambium-skill-two.md".to_string()));
 }
 
 #[tokio::test]
@@ -307,7 +307,7 @@ async fn grow_skills_sanitizes_dangerous_filenames() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = store_with_activity(&["activity"]).await;
 
@@ -322,7 +322,7 @@ async fn grow_skills_sanitizes_dangerous_filenames() {
     ]"#;
     let caller: Arc<dyn LlmCaller> = Arc::new(MockCaller::new(mock_response));
 
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller))
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller))
         .await
         .unwrap();
     println!("Result: {result}");
@@ -342,7 +342,7 @@ async fn grow_skills_sanitizes_dangerous_filenames() {
     // The sanitized name must NOT contain / or . or .. segments.
     assert!(!name.contains('/'), "filename contains slash: {name}");
     assert!(!name.contains(".."), "filename contains parent ref: {name}");
-    assert!(name.starts_with("self-grow-"), "missing prefix: {name}");
+    assert!(name.starts_with("cambium-"), "missing prefix: {name}");
     assert!(name.ends_with(".md"), "missing extension: {name}");
     // The dangerous path component should be flattened to dashes.
     assert!(
@@ -365,13 +365,13 @@ async fn grow_skills_records_call_count() {
     let _lock = TEST_MUTEX.lock().await;
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    let _guard = EnvGuard::set("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    let _guard = EnvGuard::set("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     let store = store_with_activity(&["a", "b", "c"]).await;
     let caller = Arc::new(MockCaller::new("[]"));
     let caller_dyn: Arc<dyn LlmCaller> = caller.clone();
 
-    let _ = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller_dyn))
+    let _ = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller_dyn))
         .await
         .unwrap();
 

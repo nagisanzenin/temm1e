@@ -91,7 +91,7 @@ impl SkillRegistry {
     /// the in-memory list and re-scans both directories. Returns the
     /// number of skills loaded.
     ///
-    /// Used by self-grow to pick up newly created skill files without
+    /// Used by cambium to pick up newly created skill files without
     /// requiring a binary restart.
     pub async fn reload(&mut self) -> Result<usize, Temm1eError> {
         self.load_skills().await?;
@@ -522,7 +522,7 @@ mod tests {
         let initial = registry.reload().await.unwrap();
         assert_eq!(initial, 0);
 
-        // Simulate self-grow writing a new skill file at runtime.
+        // Simulate cambium writing a new skill file at runtime.
         write_skill_file(
             &skills_dir,
             "fresh.md",

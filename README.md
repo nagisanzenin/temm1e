@@ -6,16 +6,16 @@
   <a href="https://github.com/nagisanzenin/temm1e/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/temm1e?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.com/invite/temm1e"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-4.6.1-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-4.7.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
 <p align="center"><em>Built with <a href="https://github.com/nagisanzenin/claude-code-production-grade-plugin">Production-Grade Plugin for Claude Code</a></em></p>
 
-<h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever.</h3>
+<h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever. <strong>Now grows itself.</strong></h3>
 
 <p align="center">
-  <code>115K lines</code> · <code>2,127 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>22 crates</code> · <code>full computer use</code>
+  <code>117K lines</code> · <code>2,274 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>24 crates</code> · <code>full computer use</code> · <code>cambium self-grow</code>
 </p>
 
 <p align="center"><strong>Powered by 13 layers of self-learning mechanism</strong></p>
@@ -708,7 +708,7 @@ Shell, stealth browser (vision click_at), Prowl login (OTK session capture), per
 
 ## Architecture
 
-21-crate Cargo workspace:
+23-crate Cargo workspace + watchdog supervisor:
 
 ```
 temm1e (binary)
@@ -721,6 +721,7 @@ temm1e (binary)
 ├─ temm1e-perpetuum      PERPETUUM — perpetual time-aware entity, scheduling, monitors, volition
 ├─ temm1e-anima          TEM ANIMA — emotional intelligence, user profiling, personality system
 ├─ temm1e-cores          TEMDOS — specialist sub-agent cores (architecture, code-review, test, debug, web, desktop, research, creative)
+├─ temm1e-cambium        CAMBIUM — gap-driven self-grow: zone_checker, trust, budget, history, sandbox, pipeline, deploy
 ├─ temm1e-providers      Anthropic + Gemini (native) + OpenAI-compatible (6 providers)
 ├─ temm1e-codex-oauth    ChatGPT Plus/Pro via OAuth PKCE
 ├─ temm1e-tui            Interactive terminal UI (ratatui + syntect)
@@ -735,6 +736,10 @@ temm1e (binary)
 ├─ temm1e-observable     OpenTelemetry, 6 predefined metrics
 ├─ temm1e-filestore      Local + S3/R2 file storage
 └─ temm1e-test-utils     Test helpers
+
+temm1e-watchdog (separate binary)
+└─ Immutable supervisor that monitors temm1e PID and restarts on crash.
+   Part of the Cambium immutable kernel — never self-modifiable.
 ```
 
 > [Agentic core snapshot](docs/agentic_core/SNAPSHOT_v2.6.0.md) — exact implementation reference for Tem's Mind
@@ -875,7 +880,7 @@ temm1e reset --confirm       Factory reset with backup
 
 ```bash
 cargo check --workspace                                              # Quick check
-cargo test --workspace                                               # 2,127 tests
+cargo test --workspace                                               # 2,274 tests
 cargo clippy --workspace --all-targets --all-features -- -D warnings # 0 warnings
 cargo fmt --all                                                      # Format
 cargo build --release                                                # Release binary
@@ -889,6 +894,8 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
 <summary><strong>Release Timeline</strong> — every version from first breath to now</summary>
 
 ```
+2026-04-08  v4.7.0  ●━━━ Cambium — gap-driven self-grow capability. Tem can now extend its own runtime by writing Rust code, verifying through a deterministic harness, and deploying via blue-green binary swap with automatic rollback. Named after the biological cambium (the growth layer under tree bark): heartwood = immutable kernel (vault, traits, security, the pipeline itself), cambium = growth layer (tools, skills, cores, integrations), bark = runtime surface, rings = GrowthSession history. Five phases: (0) theory + codebase self-model in docs/lab/cambium/, (1) CambiumConfig + GrowthTrigger/Kind/TrustLevel/PipelineStage types, (2) temm1e-cambium crate with zone_checker/trust/budget/history/sandbox/pipeline/deploy modules, (3) skill-layer growth via SelfWorkKind::CambiumSkills + grow_skills() handler with 24h rate limit + path traversal sanitization + JSON extractor for markdown-fenced LLM responses, (4) code pipeline with dedicated git-clone sandbox isolation at ~/.temm1e/cambium/sandbox/ + TemDOS cambium-reviewer + cambium-auditor cores, (5) blue-green binary swap with try_wait crash detection + macOS code-signing safe inode replacement + zombie-aware is_process_alive + temm1e-watchdog supervisor binary in immutable kernel. Trust hierarchy: 4 levels with earned-autonomy state machine (10 successful Level 3 changes -> autonomous, 25 Level 2 -> autonomous, 3 rollbacks in 7 days -> all locked). Real-LLM verified end-to-end with Gemini 3 Flash (5.8s, 1 skill, $0.001) and Sonnet 4.6 (12.8s, 2 skills, $0.01). Both produced valid YAML-frontmatter skills loadable by SkillRegistry. Enabled by default; toggle via /cambium on / /cambium off. Research paper: tems_lab/cambium/CAMBIUM_RESEARCH_PAPER.md. Theory: docs/lab/cambium/THEORY.md. 24 crates, 2274 tests.
+                    │
 2026-04-07  v4.6.1  ●━━━ Mission Control — interceptor v2 for Perpetuum harmony. Replaced single-task interceptor with phase-aware, Perpetuum-aware Mission Control system. Real-time agent status observation wired end-to-end (AgentTaskPhase::Display, status_tx per-slot instead of per-message, _status_rx no longer dropped). 4-way LLM classification: [AMEND] routes to pending queue (tool result injection), [QUEUE] routes to new order queue (processed after current task), [CANCEL] interrupts, [CHAT] consumed. /status fast-path: instant phase + Perpetuum + queue report (zero LLM cost). /queue fast-path: shows queued orders. Heartbeat fix: current_task no longer poisoned by heartbeat text, interceptor skips heartbeat tasks. Per-task CancellationToken via child_token() fixes stale-token bug. Order queue drain after task completion. LLM failure fallback (conservative amendment + hardcoded ack). Design doc: docs/design/MISSION_CONTROL.md. 22 crates, 2127 tests.
                     │
 2026-04-07  v4.6.0  ●━━━ Self-Learning v2: 13 Layers — 6 new self-learning mechanisms ship alongside the 7 from v4.5.1. Core stats: CoreStats struct (previously dead code) now wired end-to-end — loaded before invocation, updated after, persisted to memory, success rate shown in output. Tool reliability: per-(tool, task_type) success/failure tracking across sessions, 30-day rolling window injected into context (~50-100 tokens). Classification feedback: every task's category/difficulty/rounds/tools/cost/success persisted, aggregated into empirical priors for the classifier. Prompt tier tracking: which prompt tier (Minimal/Basic/Standard/Full) was used per task, correlated with outcome. Consciousness efficacy: had_whisper flag tracks whether consciousness injected, enabling continuous A/B comparison. Skill usage: invocation counts per skill for adoption tracking. MCP tool quality: covered by tool reliability (MCP tools share the execution path). All mechanisms follow V(a,t) = Q×R×U framework. New tables: tool_reliability, classification_outcomes, skill_usage. 22 crates, 2127 tests.

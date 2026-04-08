@@ -3328,6 +3328,9 @@ Available commands:\n\n\
 /memory — Show current memory strategy\n\
 /memory lambda — Switch to λ-Memory (decay + persistence)\n\
 /memory echo — Switch to Echo Memory (context window only)\n\
+/cambium — Cambium status (gap-driven self-grow)\n\
+/cambium on — Enable cambium growth\n\
+/cambium off — Disable cambium growth\n\
 /mcp — List connected MCP servers and tools\n\
 /mcp add <name> <command-or-url> — Connect a new MCP server\n\
 /mcp remove <name> — Disconnect an MCP server\n\
@@ -3349,6 +3352,70 @@ Just type a message to chat with the AI agent.",
                                         let reply = temm1e_core::types::message::OutboundMessage {
                                             chat_id: msg.chat_id.clone(),
                                             text: help_text.to_string(),
+                                            reply_to: Some(msg.id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        send_with_retry(&*sender, reply).await;
+                                        is_heartbeat_clone.store(false, Ordering::Relaxed);
+                                        return;
+                                    }
+
+                                    // /cambium — gap-driven self-grow toggle
+                                    if cmd_lower == "/cambium" || cmd_lower.starts_with("/cambium ") {
+                                        let subcmd = cmd_lower
+                                            .strip_prefix("/cambium")
+                                            .unwrap_or("")
+                                            .trim();
+                                        let cambium_path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".temm1e")
+                                            .join("cambium.toml");
+                                        let current_enabled = std::fs::read_to_string(&cambium_path)
+                                            .ok()
+                                            .and_then(|s| {
+                                                s.lines()
+                                                    .find(|l| l.trim().starts_with("enabled"))
+                                                    .map(|l| !l.contains("false"))
+                                            })
+                                            .unwrap_or(true);
+                                        let response = match subcmd {
+                                            "on" | "enable" | "enabled" => {
+                                                if let Some(parent) = cambium_path.parent() {
+                                                    let _ = std::fs::create_dir_all(parent);
+                                                }
+                                                let _ = std::fs::write(
+                                                    &cambium_path,
+                                                    "# Cambium runtime config — toggled via /cambium\nenabled = true\n",
+                                                );
+                                                "Cambium ENABLED. Tem may grow new capabilities at the cambium layer (heartwood stays immutable).".to_string()
+                                            }
+                                            "off" | "disable" | "disabled" => {
+                                                if let Some(parent) = cambium_path.parent() {
+                                                    let _ = std::fs::create_dir_all(parent);
+                                                }
+                                                let _ = std::fs::write(
+                                                    &cambium_path,
+                                                    "# Cambium runtime config — toggled via /cambium\nenabled = false\n",
+                                                );
+                                                "Cambium DISABLED. Tem will not grow new capabilities until you run /cambium on.".to_string()
+                                            }
+                                            "" | "status" => format!(
+                                                "Cambium status: {}\n\n\
+                                                 Cambium is the layer where Tem grows new capabilities at the edge while the heartwood (immutable kernel: vault, core traits, security) stays stable. Named after the biological cambium — the growth tissue under tree bark where rings are added each year.\n\n\
+                                                 Commands:\n\
+                                                 /cambium on — enable cambium growth\n\
+                                                 /cambium off — disable cambium growth\n\
+                                                 /cambium status — show current state (this view)\n\n\
+                                                 Default: enabled. Persisted to ~/.temm1e/cambium.toml",
+                                                if current_enabled { "ENABLED" } else { "DISABLED" }
+                                            ),
+                                            other => format!(
+                                                "Unknown subcommand: {other}\nTry: /cambium on | /cambium off | /cambium status"
+                                            ),
+                                        };
+                                        let reply = temm1e_core::types::message::OutboundMessage {
+                                            chat_id: msg.chat_id.clone(),
+                                            text: response,
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
@@ -5825,6 +5892,9 @@ Just type a message to chat with the AI agent.",
                          /memory — Show current memory strategy\n\
                          /memory lambda — Switch to λ-Memory (decay + persistence)\n\
                          /memory echo — Switch to Echo Memory (context window only)\n\
+                         /cambium — Cambium status (gap-driven self-grow)\n\
+                         /cambium on — Enable cambium growth\n\
+                         /cambium off — Disable cambium growth\n\
                          /mcp — List connected MCP servers and tools\n\
                          /mcp add <name> <command-or-url> — Connect a new MCP server\n\
                          /mcp remove <name> — Disconnect an MCP server\n\
@@ -5908,6 +5978,81 @@ Just type a message to chat with the AI agent.",
                                  /vigil auto — enable auto-reporting\n\
                                  /vigil disable — disable all vigil\n\
                                  /addkey github — add GitHub PAT for issue creation\n"
+                            );
+                        }
+                    }
+                    eprint!("temm1e> ");
+                    continue;
+                }
+
+                // /cambium — gap-driven self-grow toggle
+                if cmd_lower == "/cambium" || cmd_lower.starts_with("/cambium ") {
+                    let subcmd = cmd_lower.strip_prefix("/cambium").unwrap_or("").trim();
+                    let cambium_path = dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".temm1e")
+                        .join("cambium.toml");
+                    let current_enabled = std::fs::read_to_string(&cambium_path)
+                        .ok()
+                        .and_then(|s| {
+                            s.lines()
+                                .find(|l| l.trim().starts_with("enabled"))
+                                .map(|l| !l.contains("false"))
+                        })
+                        .unwrap_or(true); // default enabled
+                    match subcmd {
+                        "on" | "enable" | "enabled" => {
+                            if let Some(parent) = cambium_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            std::fs::write(
+                                &cambium_path,
+                                "# Cambium runtime config — toggled via /cambium\nenabled = true\n",
+                            )
+                            .ok();
+                            println!(
+                                "\nCambium ENABLED. Tem may grow new capabilities at the\n\
+                                 cambium layer (heartwood stays immutable).\n"
+                            );
+                        }
+                        "off" | "disable" | "disabled" => {
+                            if let Some(parent) = cambium_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            std::fs::write(
+                                &cambium_path,
+                                "# Cambium runtime config — toggled via /cambium\nenabled = false\n",
+                            )
+                            .ok();
+                            println!(
+                                "\nCambium DISABLED. Tem will not grow new capabilities\n\
+                                 until you run /cambium on.\n"
+                            );
+                        }
+                        "" | "status" => {
+                            println!(
+                                "\nCambium status: {}\n\n\
+                                 Cambium is the layer where Tem grows new capabilities at\n\
+                                 the edge while the heartwood (immutable kernel: vault, core\n\
+                                 traits, security) stays stable. Named after the biological\n\
+                                 cambium — the growth tissue under tree bark where rings are\n\
+                                 added each year.\n\n\
+                                 Commands:\n\
+                                 /cambium on    — enable cambium growth\n\
+                                 /cambium off   — disable cambium growth\n\
+                                 /cambium status — show current state (this view)\n\n\
+                                 Default: enabled. Persisted to ~/.temm1e/cambium.toml\n",
+                                if current_enabled {
+                                    "ENABLED"
+                                } else {
+                                    "DISABLED"
+                                }
+                            );
+                        }
+                        other => {
+                            println!(
+                                "\nUnknown subcommand: {other}\n\
+                                 Try: /cambium on | /cambium off | /cambium status\n"
                             );
                         }
                     }

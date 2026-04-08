@@ -3,7 +3,7 @@
 //! This is the Phase 5d "real binary swap" test. It uses the actual built
 //! temm1e release binary, NOT a shell-script fake. The test runs ONLY when
 //! both `target/release/temm1e` exists AND the env var
-//! `TEMM1E_SELF_GROW_REAL_TEST=1` is set, to avoid running by default.
+//! `TEMM1E_CAMBIUM_REAL_TEST=1` is set, to avoid running by default.
 //!
 //! ## Production safety
 //!
@@ -24,18 +24,18 @@
 //! ## Run with
 //!
 //! ```sh
-//! TEMM1E_SELF_GROW_REAL_TEST=1 \
-//!   cargo test -p temm1e-self-grow --test real_temm1e_swap_test \
+//! TEMM1E_CAMBIUM_REAL_TEST=1 \
+//!   cargo test -p temm1e-cambium --test real_temm1e_swap_test \
 //!   -- --nocapture
 //! ```
 
 use std::path::PathBuf;
 
-use temm1e_self_grow::deploy::{DeployConfig, DeployOutcome, Deployer};
+use temm1e_cambium::deploy::{DeployConfig, DeployOutcome, Deployer};
 use tokio::process::Command;
 
 fn workspace_root() -> PathBuf {
-    // tests/ is at crates/temm1e-self-grow/tests/, so go up 3 levels.
+    // tests/ is at crates/temm1e-cambium/tests/, so go up 3 levels.
     std::env::current_dir()
         .unwrap()
         .ancestors()
@@ -54,13 +54,13 @@ fn real_temm1e_path() -> Option<PathBuf> {
 }
 
 fn should_run_real_test() -> bool {
-    std::env::var("TEMM1E_SELF_GROW_REAL_TEST").unwrap_or_default() == "1"
+    std::env::var("TEMM1E_CAMBIUM_REAL_TEST").unwrap_or_default() == "1"
 }
 
 #[tokio::test]
 async fn real_temm1e_binary_swap_end_to_end() {
     if !should_run_real_test() {
-        println!("SKIPPED: set TEMM1E_SELF_GROW_REAL_TEST=1 to enable");
+        println!("SKIPPED: set TEMM1E_CAMBIUM_REAL_TEST=1 to enable");
         return;
     }
     let real_bin = match real_temm1e_path() {

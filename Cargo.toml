@@ -24,12 +24,12 @@ members = [
     "crates/temm1e-perpetuum",
     "crates/temm1e-anima",
     "crates/temm1e-cores",
-    "crates/temm1e-self-grow",
+    "crates/temm1e-cambium",
     "crates/temm1e-watchdog",
 ]
 
 [workspace.package]
-version = "4.6.1"
+version = "4.7.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/nagisanzenin/temm1e"

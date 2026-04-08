@@ -7,7 +7,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use temm1e_core::types::self_grow::TrustLevel;
+use temm1e_core::types::cambium::TrustLevel;
 
 /// A manifest of protected zones and immutable file checksums.
 ///

@@ -1,6 +1,6 @@
-//! # Self-Grow: Gap-Driven Code Evolution with Verification Harness
+//! # Cambium: Gap-Driven Code Evolution with Verification Harness
 //!
-//! The self-grow pipeline enables Tem to modify its own codebase through a
+//! The cambium pipeline enables Tem to modify its own codebase through a
 //! controlled, trust-gated process:
 //!
 //! 1. **Zone checking** -- protected zone enforcement ensures immutable kernel

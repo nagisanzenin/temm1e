@@ -1,8 +1,8 @@
-# Self-Grow: Protected Zones
+# Cambium: Protected Zones
 
 > **Status:** Authoritative reference -- enforced by verification pipeline  
 > **Date:** 2026-04-08  
-> **Purpose:** Defines immutable files, approval-required zones, and autonomous zones for self-grow
+> **Purpose:** Defines immutable files, approval-required zones, and autonomous zones for cambium
 
 ---
 
@@ -10,7 +10,7 @@
 
 | Level | Name | Policy |
 |-------|------|--------|
-| 0 | Immutable Kernel | NEVER modified by self-grow. SHA-256 checksums verified before every growth cycle. Any mismatch aborts the pipeline. |
+| 0 | Immutable Kernel | NEVER modified by cambium. SHA-256 checksums verified before every growth cycle. Any mismatch aborts the pipeline. |
 | 1 | Approval Required | Self-grow may propose changes but MUST NOT apply them without explicit human approval. Full pipeline verification required. |
 | 2 | Autonomous Full Pipeline | Self-grow may modify autonomously. All compilation gates must pass: `cargo check`, `cargo clippy`, `cargo fmt --check`, `cargo test`. |
 | 3 | Autonomous Basic | Self-grow may modify with minimal verification (syntax/lint only). |
@@ -19,7 +19,7 @@
 
 ## Level 0 -- Immutable Kernel
 
-Every file listed below has a frozen SHA-256 checksum. The self-grow pipeline verifies these checksums at the start of every growth cycle. If any checksum does not match, the entire cycle is aborted.
+Every file listed below has a frozen SHA-256 checksum. The cambium pipeline verifies these checksums at the start of every growth cycle. If any checksum does not match, the entire cycle is aborted.
 
 ### Core Trait Definitions
 
@@ -57,12 +57,12 @@ Every file listed below has a frozen SHA-256 checksum. The self-grow pipeline ve
 | `Cargo.toml` (workspace) | `267c33d36782b192dd060bc049608285c49d726fa34aeeae3e21be14dfb7aa9a` |
 | `build.rs` | `7a977171a283a182553e73b65685f67c1323442daf6928c79fc81a5e6bebf797` |
 
-### Self-Grow Theory and Policy
+### Cambium Theory and Policy
 
 | File | SHA-256 |
 |------|---------|
-| `docs/lab/self-grow/THEORY.md` | Computed on finalization |
-| `docs/lab/self-grow/PROTECTED_ZONES.md` | Self-referential -- checksum updated on each release |
+| `docs/lab/cambium/THEORY.md` | Computed on finalization |
+| `docs/lab/cambium/PROTECTED_ZONES.md` | Self-referential -- checksum updated on each release |
 
 ---
 
@@ -120,7 +120,7 @@ Self-grow may modify these paths with minimal verification (syntax and lint chec
 
 ## Checksum Verification Protocol
 
-Before every self-grow cycle:
+Before every cambium cycle:
 
 1. Compute SHA-256 of every Level 0 file listed above.
 2. Compare against the checksums in this document.

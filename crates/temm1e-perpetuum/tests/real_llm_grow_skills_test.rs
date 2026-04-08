@@ -1,13 +1,13 @@
-//! # Real-LLM end-to-end test for skill-layer self-growth.
+//! # Real-LLM end-to-end test for skill-layer cambium growth.
 //!
-//! This is the ULTIMATE proof that Phases 0-5 of self-grow actually work.
-//! Unlike the mock-LLM test in `self_grow_skills_test.rs`, this one calls
+//! This is the ULTIMATE proof that Phases 0-5 of Cambium actually work.
+//! Unlike the mock-LLM test in `cambium_skills_test.rs`, this one calls
 //! REAL LLM providers (Gemini 3 Flash and Anthropic Sonnet 4.6) and proves
 //! the entire loop works end-to-end with real model output.
 //!
 //! ## What this test proves
 //!
-//! 1. The self-grow code (Phases 1-3) compiles and runs against real APIs
+//! 1. The cambium code (Phases 1-3) compiles and runs against real APIs
 //! 2. The verification harness (Phase 2) doesn't get in the way
 //! 3. The LlmCaller -> grow_skills() -> file write loop works with real models
 //! 4. The output is good enough that real models can produce parseable JSON
@@ -131,7 +131,7 @@ async fn run_session(label: &str, model: &str, caller: Arc<dyn LlmCaller>) -> Te
     // Setup: tempdir for skills output (so we don't pollute ~/.temm1e/)
     let tmp = tempdir().unwrap();
     let skills_dir = tmp.path().join("skills");
-    std::env::set_var("TEMM1E_SELF_GROW_SKILLS_DIR", &skills_dir);
+    std::env::set_var("TEMM1E_CAMBIUM_SKILLS_DIR", &skills_dir);
 
     // Setup: store with synthetic activity
     let store = Arc::new(Store::new("sqlite::memory:").await.unwrap());
@@ -146,12 +146,12 @@ async fn run_session(label: &str, model: &str, caller: Arc<dyn LlmCaller>) -> Te
     // Run the self-work
     println!("Calling LLM...");
     let started = std::time::Instant::now();
-    let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, Some(&caller)).await;
+    let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, Some(&caller)).await;
     let elapsed = started.elapsed();
     println!("Elapsed: {:?}", elapsed);
 
     // Clean up env var
-    std::env::remove_var("TEMM1E_SELF_GROW_SKILLS_DIR");
+    std::env::remove_var("TEMM1E_CAMBIUM_SKILLS_DIR");
 
     let summary = match &result {
         Ok(s) => s.clone(),

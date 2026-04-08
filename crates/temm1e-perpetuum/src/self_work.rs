@@ -39,7 +39,7 @@ pub async fn execute_self_work(
                 Ok("Skipped: no LLM caller available".to_string())
             }
         }
-        SelfWorkKind::SelfGrowSkills => {
+        SelfWorkKind::CambiumSkills => {
             if let Some(caller) = caller {
                 grow_skills(store, caller).await
             } else {
@@ -286,11 +286,11 @@ async fn run_vigil(store: &Arc<Store>, caller: &Arc<dyn LlmCaller>) -> Result<St
     ))
 }
 
-/// Skill-layer self-growth: analyze recent activity for unmet capability
+/// Skill-layer cambium growth: analyze recent activity for unmet capability
 /// gaps, then write reusable skill files to `~/.temm1e/skills/`.
 ///
 /// Rate limited to once per 24 hours. The handler is gated by
-/// `self_grow.enabled = true` at the call site (concern dispatch). When
+/// `cambium.enabled = true` at the call site (concern dispatch). When
 /// disabled, this function is never invoked.
 ///
 /// Output skill files use the TEMM1E native format (YAML frontmatter +
@@ -303,7 +303,7 @@ async fn grow_skills(
     // Rate limit: max 1 skill-grow session per 24 hours.
     if let Ok(notes) = store.get_volition_notes(20).await {
         for note in &notes {
-            if let Some(ts_str) = note.strip_prefix("skill_grow_last:") {
+            if let Some(ts_str) = note.strip_prefix("cambium_grow_last:") {
                 if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str.trim()) {
                     let elapsed = chrono::Utc::now() - dt.with_timezone(&chrono::Utc);
                     if elapsed < chrono::Duration::hours(24) {
@@ -360,18 +360,18 @@ async fn grow_skills(
         // Still record timestamp so we don't re-run for 24h.
         store
             .save_volition_note(
-                &format!("skill_grow_last:{}", chrono::Utc::now().to_rfc3339()),
+                &format!("cambium_grow_last:{}", chrono::Utc::now().to_rfc3339()),
                 "self_work",
             )
             .await?;
         return Ok("Skill grow: no skill opportunities found".to_string());
     }
 
-    // Write each skill to ~/.temm1e/skills/self-grow-<name>.md
-    // Test override: set TEMM1E_SELF_GROW_SKILLS_DIR to redirect skill output
+    // Write each skill to ~/.temm1e/skills/cambium-<name>.md
+    // Test override: set TEMM1E_CAMBIUM_SKILLS_DIR to redirect skill output
     // to a controlled directory. Production never sets this and uses
     // ~/.temm1e/skills/.
-    let skills_dir = if let Ok(override_path) = std::env::var("TEMM1E_SELF_GROW_SKILLS_DIR") {
+    let skills_dir = if let Ok(override_path) = std::env::var("TEMM1E_CAMBIUM_SKILLS_DIR") {
         std::path::PathBuf::from(override_path)
     } else {
         match dirs::home_dir() {
@@ -406,7 +406,7 @@ async fn grow_skills(
             continue;
         }
 
-        let filename = format!("self-grow-{safe_name}.md");
+        let filename = format!("cambium-{safe_name}.md");
         let path = skills_dir.join(&filename);
 
         let caps_yaml: String = suggestion
@@ -440,7 +440,7 @@ async fn grow_skills(
     // Record timestamp for rate limiting.
     store
         .save_volition_note(
-            &format!("skill_grow_last:{}", chrono::Utc::now().to_rfc3339()),
+            &format!("cambium_grow_last:{}", chrono::Utc::now().to_rfc3339()),
             "self_work",
         )
         .await?;
@@ -508,9 +508,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn self_grow_skills_no_llm_skips_gracefully() {
+    async fn cambium_skills_no_llm_skips_gracefully() {
         let store = Arc::new(Store::new("sqlite::memory:").await.unwrap());
-        let result = execute_self_work(&SelfWorkKind::SelfGrowSkills, &store, None).await;
+        let result = execute_self_work(&SelfWorkKind::CambiumSkills, &store, None).await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Skipped"));
     }

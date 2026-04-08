@@ -1,7 +1,7 @@
 //! Session budget enforcement.
 //!
 //! Tracks per-session limits on lines changed and files touched to prevent
-//! runaway modifications. Each self-grow session creates a `SessionBudget`
+//! runaway modifications. Each cambium session creates a `SessionBudget`
 //! with maximum limits and calls `check()` before committing changes and
 //! `record()` after each successful stage.
 
