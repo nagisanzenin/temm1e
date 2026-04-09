@@ -27,6 +27,8 @@ pub struct ToolCallEntry {
     pub expanded: bool,
     pub started_at: Instant,
     pub elapsed: Duration,
+    /// First-line result preview (populated on ToolCompleted).
+    pub result_preview: String,
 }
 
 /// The activity/observability panel state.
@@ -79,26 +81,74 @@ impl ActivityPanel {
         self.output_tokens = status.output_tokens;
         self.cost_usd = status.cost_usd;
 
-        // Track tool calls
-        if let AgentTaskPhase::ExecutingTool {
-            tool_name,
-            tool_index,
-            ..
-        } = &status.phase
-        {
-            if self.tool_calls.len() <= *tool_index as usize
-                || self.tool_calls.last().map(|t| &t.name) != Some(tool_name)
-            {
-                self.tool_calls.push(ToolCallEntry {
-                    name: tool_name.clone(),
-                    args_summary: String::new(),
-                    status: ToolCallStatus::Running,
-                    output_lines: Vec::new(),
-                    expanded: true,
-                    started_at: Instant::now(),
-                    elapsed: Duration::ZERO,
-                });
+        match &status.phase {
+            // ── Tool started — push a new entry or reuse the current one ─
+            AgentTaskPhase::ExecutingTool {
+                tool_name,
+                tool_index,
+                args_preview,
+                ..
+            } => {
+                let should_push = self.tool_calls.len() <= *tool_index as usize
+                    || self
+                        .tool_calls
+                        .last()
+                        .map(|t| &t.name)
+                        .map(|n| n != tool_name)
+                        .unwrap_or(true)
+                    || self
+                        .tool_calls
+                        .last()
+                        .map(|t| !matches!(t.status, ToolCallStatus::Running))
+                        .unwrap_or(false);
+                if should_push {
+                    self.tool_calls.push(ToolCallEntry {
+                        name: tool_name.clone(),
+                        args_summary: args_preview.clone(),
+                        status: ToolCallStatus::Running,
+                        output_lines: Vec::new(),
+                        expanded: true,
+                        started_at: Instant::now(),
+                        elapsed: Duration::ZERO,
+                        result_preview: String::new(),
+                    });
+                } else if let Some(last) = self.tool_calls.last_mut() {
+                    // Same in-flight entry — keep args up to date
+                    last.args_summary = args_preview.clone();
+                }
             }
+            // ── Tool finished — mark the most recent matching entry ─────
+            AgentTaskPhase::ToolCompleted {
+                tool_name,
+                duration_ms,
+                ok,
+                result_preview,
+                ..
+            } => {
+                if let Some(entry) =
+                    self.tool_calls.iter_mut().rev().find(|t| {
+                        &t.name == tool_name && matches!(t.status, ToolCallStatus::Running)
+                    })
+                {
+                    entry.status = if *ok {
+                        ToolCallStatus::Success
+                    } else {
+                        ToolCallStatus::Failed(result_preview.clone())
+                    };
+                    entry.elapsed = Duration::from_millis(*duration_ms);
+                    entry.result_preview = result_preview.clone();
+                }
+            }
+            // ── Interrupted — mark all running entries as cancelled ─────
+            AgentTaskPhase::Interrupted { .. } => {
+                for entry in self.tool_calls.iter_mut() {
+                    if matches!(entry.status, ToolCallStatus::Running) {
+                        entry.status = ToolCallStatus::Failed("[cancelled]".to_string());
+                        entry.result_preview = "[cancelled]".to_string();
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -145,7 +195,13 @@ impl ActivityPanel {
             ),
         ]));
 
-        // Phase indicators
+        // Phase indicators.
+        //
+        // NOTE: the "Executing Tools" row also matches ToolCompleted —
+        // a tool completion is a transient state between tool runs,
+        // still visually "on" the Executing Tools step until the next
+        // provider call. Without this, the stepper would silently
+        // render every phase as "done" when ToolCompleted fires. (B2.)
         let phases = [
             ("Preparing", matches!(self.phase, AgentTaskPhase::Preparing)),
             (
@@ -158,7 +214,10 @@ impl ActivityPanel {
             ),
             (
                 "Executing Tools",
-                matches!(self.phase, AgentTaskPhase::ExecutingTool { .. }),
+                matches!(
+                    self.phase,
+                    AgentTaskPhase::ExecutingTool { .. } | AgentTaskPhase::ToolCompleted { .. }
+                ),
             ),
             ("Finishing", matches!(self.phase, AgentTaskPhase::Finishing)),
         ];
@@ -179,36 +238,66 @@ impl ActivityPanel {
             )));
         }
 
-        // Tool calls
-        for entry in &self.tool_calls {
-            let status_icon = match &entry.status {
-                ToolCallStatus::Running => "\u{25b6}",
-                ToolCallStatus::Success => "\u{2713}",
-                ToolCallStatus::Failed(_) => "\u{2717}",
+        // Tool calls — streaming trace (last 5 visible)
+        lines.push(Line::from(""));
+        let visible_count = self.tool_calls.len().min(5);
+        let start_idx = self.tool_calls.len().saturating_sub(5);
+        for entry in &self.tool_calls[start_idx..start_idx + visible_count] {
+            let (status_icon, status_style) = match &entry.status {
+                ToolCallStatus::Running => ("\u{25b8}", tool_style), // ▸
+                ToolCallStatus::Success => ("\u{2713}", phase_done),
+                ToolCallStatus::Failed(_) => ("\u{2717}", error_style),
             };
-            let status_style = match &entry.status {
-                ToolCallStatus::Running => tool_style,
-                ToolCallStatus::Success => phase_done,
-                ToolCallStatus::Failed(_) => error_style,
+            let duration_display = match &entry.status {
+                ToolCallStatus::Running => format!("{:.1}s ⧖", entry.elapsed.as_secs_f64()),
+                _ => {
+                    let ms = entry.elapsed.as_millis();
+                    if ms >= 1000 {
+                        format!("{:.1}s", ms as f64 / 1000.0)
+                    } else {
+                        format!("{ms}ms")
+                    }
+                }
             };
+
+            // Show args preview while running; result preview after
+            let detail: String = match &entry.status {
+                ToolCallStatus::Running => {
+                    let ap: String = entry.args_summary.chars().take(56).collect();
+                    if ap.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {ap}")
+                    }
+                }
+                _ => {
+                    let rp: String = entry.result_preview.chars().take(56).collect();
+                    if rp.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" → {rp}")
+                    }
+                }
+            };
+
             lines.push(Line::from(vec![
                 Span::styled(format!(" {} ", status_icon), status_style),
                 Span::styled(entry.name.clone(), tool_style),
+                Span::styled(detail, info_style.add_modifier(Modifier::DIM)),
                 Span::styled(
-                    format!(" ({:.1}s)", entry.elapsed.as_secs_f64()),
+                    format!("  {duration_display}"),
                     info_style.add_modifier(Modifier::DIM),
                 ),
             ]));
-
-            // Tool output lines (if expanded)
-            if entry.expanded {
-                for output_line in entry.output_lines.iter().take(10) {
-                    lines.push(Line::from(Span::styled(
-                        format!("   \u{2502} {}", output_line),
-                        info_style.add_modifier(Modifier::DIM),
-                    )));
-                }
-            }
+        }
+        if self.tool_calls.len() > 5 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "    · {} earlier tool call(s) hidden",
+                    self.tool_calls.len() - 5
+                ),
+                info_style.add_modifier(Modifier::DIM),
+            )));
         }
 
         lines

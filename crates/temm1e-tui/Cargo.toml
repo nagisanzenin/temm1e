@@ -51,6 +51,10 @@ uuid.workspace = true
 dirs.workspace = true
 bytes.workspace = true
 
+# Clipboard (A5 — code block yank)
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+base64 = "0.22"
+
 [features]
 default = ["mcp", "codex-oauth"]
 mcp = ["dep:temm1e-mcp"]

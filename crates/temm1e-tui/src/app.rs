@@ -13,6 +13,7 @@ use crate::streaming::renderer::StreamingRenderer;
 use crate::streaming::token_counter::TokenCounter;
 use crate::theme::Theme;
 use crate::widgets::activity_panel::ActivityPanel;
+use crate::widgets::copy_picker;
 use crate::widgets::markdown::{render_markdown_with_width, RenderedLine};
 use crate::widgets::message_list::{DisplayMessage, MessageList, MessageRole, TurnUsage};
 use crate::widgets::select_list::SelectState;
@@ -30,6 +31,44 @@ pub enum Overlay {
     None,
     Help,
     Config(OverlayKind),
+    CopyPicker,
+}
+
+/// One configured provider's API key for the `/keys` overlay.
+///
+/// The `fingerprint` is the last 4 characters of the full key — safe to
+/// display without leaking secrets.
+#[derive(Debug, Clone)]
+pub struct ApiKeyEntry {
+    pub provider: String,
+    pub fingerprint: String,
+    pub is_active: bool,
+}
+
+/// Git repository info for the status bar.
+#[derive(Debug, Clone)]
+pub struct GitInfo {
+    pub repo_name: String,
+    pub branch: String,
+}
+
+/// A captured code block from rendered markdown, for the yank/copy picker.
+#[derive(Debug, Clone)]
+pub struct CodeBlock {
+    pub lang: String,
+    pub text: String,
+    pub line_count: usize,
+}
+
+/// A completed or in-flight tool call record for the /tools history overlay.
+#[derive(Debug, Clone)]
+pub struct ToolCallRecord {
+    pub turn_number: u32,
+    pub tool_name: String,
+    pub args_preview: String,
+    pub duration_ms: Option<u64>,
+    pub ok: Option<bool>,
+    pub result_preview: Option<String>,
 }
 
 /// Root application state (TEA model).
@@ -58,6 +97,24 @@ pub struct AppState {
     pub current_model: Option<String>,
     pub current_provider: Option<String>,
     pub selected_mode: Option<String>,
+
+    // Cached config for overlays (populated at startup)
+    pub api_keys_cache: Vec<ApiKeyEntry>,
+    pub git_info: Option<GitInfo>,
+
+    // Code blocks (A5 — yank picker)
+    pub code_blocks: std::collections::VecDeque<CodeBlock>,
+
+    // Mouse capture toggle (A4 — copy mode)
+    pub mouse_capture_enabled: bool,
+    pub needs_mouse_toggle: bool,
+
+    // Tool call history (D3 — /tools overlay)
+    pub tool_call_history: Vec<ToolCallRecord>,
+    pub current_turn: u32,
+
+    // Escape cancellation (C4)
+    pub pending_cancel: bool,
 
     // Commands
     pub command_registry: CommandRegistry,
@@ -99,6 +156,14 @@ impl AppState {
             current_model: None,
             current_provider: None,
             selected_mode: None,
+            api_keys_cache: Vec::new(),
+            git_info: None,
+            code_blocks: std::collections::VecDeque::with_capacity(9),
+            mouse_capture_enabled: true,
+            needs_mouse_toggle: false,
+            tool_call_history: Vec::new(),
+            current_turn: 0,
+            pending_cancel: false,
             command_registry: CommandRegistry::new(),
             theme,
             onboarding_step: OnboardingStep::Welcome,
@@ -174,6 +239,42 @@ pub fn update(state: &mut AppState, event: Event) {
             state.token_counter.turn_input_tokens = status.input_tokens;
             state.token_counter.turn_output_tokens = status.output_tokens;
 
+            // D3 — record tool call events into the /tools history
+            match &status.phase {
+                AgentTaskPhase::ExecutingTool { tool_name, .. } => {
+                    // Only push if this is a new call (dedupe by tool_name matching last record)
+                    let should_push = state
+                        .tool_call_history
+                        .last()
+                        .map(|r| r.tool_name != *tool_name || r.duration_ms.is_some())
+                        .unwrap_or(true);
+                    if should_push {
+                        state.tool_call_history.push(ToolCallRecord {
+                            turn_number: state.current_turn,
+                            tool_name: tool_name.clone(),
+                            args_preview: String::new(),
+                            duration_ms: None,
+                            ok: None,
+                            result_preview: None,
+                        });
+                    }
+                }
+                AgentTaskPhase::Interrupted { .. } => {
+                    // Mark the most recent in-flight tool as cancelled
+                    if let Some(last) = state
+                        .tool_call_history
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.duration_ms.is_none())
+                    {
+                        last.duration_ms = Some(0);
+                        last.ok = Some(false);
+                        last.result_preview = Some("[cancelled]".to_string());
+                    }
+                }
+                _ => {}
+            }
+
             if matches!(status.phase, AgentTaskPhase::Done) {
                 state.is_agent_working = false;
             }
@@ -204,6 +305,20 @@ pub fn update(state: &mut AppState, event: Event) {
 
             // Display the response (skip if empty)
             if !response.message.text.trim().is_empty() {
+                // Capture code blocks for the yank picker (A5)
+                for (lang, text, line_count) in
+                    crate::widgets::markdown::extract_code_blocks(&response.message.text)
+                {
+                    state.code_blocks.push_back(CodeBlock {
+                        lang,
+                        text,
+                        line_count,
+                    });
+                    while state.code_blocks.len() > 9 {
+                        state.code_blocks.pop_front();
+                    }
+                }
+
                 let lines = render_markdown_with_width(
                     &response.message.text,
                     state.theme.text,
@@ -257,7 +372,40 @@ pub fn update(state: &mut AppState, event: Event) {
 fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
     use crate::input::handler::{handle_input_event, InputResult};
 
-    // Handle overlays first
+    // Copy picker overlay has its own keybinds (1-9 to copy, Esc to close)
+    if state.overlay == Overlay::CopyPicker {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => {
+                state.overlay = Overlay::None;
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as u8 - b'1') as usize;
+                // Most-recent-first — iter().rev() matches render order
+                if let Some(block) = state.code_blocks.iter().rev().nth(idx).cloned() {
+                    let toast = match copy_picker::copy_to_clipboard(&block.text) {
+                        Ok(()) => format!(
+                            "Copied block {} ({}, {} lines)",
+                            idx + 1,
+                            if block.lang.is_empty() {
+                                "text"
+                            } else {
+                                &block.lang
+                            },
+                            block.line_count
+                        ),
+                        Err(e) => format!("Copy failed: {e}"),
+                    };
+                    push_system_line(state, toast);
+                }
+                state.overlay = Overlay::None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Handle other overlays — Esc closes them
     if state.overlay != Overlay::None {
         if key.code == crossterm::event::KeyCode::Esc {
             state.overlay = Overlay::None;
@@ -279,20 +427,8 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
         }
         InputResult::Interrupt => {
             if state.is_agent_working {
-                // First Ctrl+C while agent working: interrupt agent
-                state.is_agent_working = false;
-                state.message_list.push(DisplayMessage {
-                    role: MessageRole::System,
-                    content: vec![RenderedLine {
-                        spans: vec![ratatui::text::Span::styled(
-                            "Interrupted.".to_string(),
-                            state.theme.secondary,
-                        )],
-                        indent: 0,
-                    }],
-                    timestamp: Utc::now(),
-                    usage: None,
-                });
+                // Tier C: fire the real interrupt flag via lib.rs event loop
+                state.pending_cancel = true;
                 state.last_ctrl_c = None;
             } else if let Some(last) = state.last_ctrl_c {
                 // Second Ctrl+C within 2 seconds: quit
@@ -301,35 +437,13 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
                 } else {
                     // Expired — treat as first press
                     state.last_ctrl_c = Some(std::time::Instant::now());
-                    state.message_list.push(DisplayMessage {
-                        role: MessageRole::System,
-                        content: vec![RenderedLine {
-                            spans: vec![ratatui::text::Span::styled(
-                                "Press Ctrl+C again to exit".to_string(),
-                                state.theme.secondary,
-                            )],
-                            indent: 0,
-                        }],
-                        timestamp: Utc::now(),
-                        usage: None,
-                    });
+                    push_system_line(state, "Press Ctrl+C again to exit".to_string());
                 }
             } else {
                 // First Ctrl+C while idle: show hint
                 state.last_ctrl_c = Some(std::time::Instant::now());
                 state.input.clear();
-                state.message_list.push(DisplayMessage {
-                    role: MessageRole::System,
-                    content: vec![RenderedLine {
-                        spans: vec![ratatui::text::Span::styled(
-                            "Press Ctrl+C again to exit".to_string(),
-                            state.theme.secondary,
-                        )],
-                        indent: 0,
-                    }],
-                    timestamp: Utc::now(),
-                    usage: None,
-                });
+                push_system_line(state, "Press Ctrl+C again to exit".to_string());
             }
         }
         InputResult::Quit => {
@@ -357,7 +471,29 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
             state.message_list.scroll_down(page);
         }
         InputResult::Escape => {
-            state.overlay = Overlay::None;
+            // Tier C: Escape cancels a running task
+            if state.is_agent_working {
+                state.pending_cancel = true;
+            } else {
+                state.overlay = Overlay::None;
+            }
+        }
+        InputResult::YankCodeBlock => {
+            if state.code_blocks.is_empty() {
+                push_system_line(state, "No code blocks to copy yet.".to_string());
+            } else {
+                state.overlay = Overlay::CopyPicker;
+            }
+        }
+        InputResult::ToggleMouseCapture => {
+            state.mouse_capture_enabled = !state.mouse_capture_enabled;
+            state.needs_mouse_toggle = true;
+            let msg = if state.mouse_capture_enabled {
+                "Scroll mode — scroll wheel + keybinds active"
+            } else {
+                "Select mode — select text with mouse, press Alt+S to resume"
+            };
+            push_system_line(state, msg.to_string());
         }
         InputResult::TabComplete => {
             // Try command completion
@@ -374,6 +510,19 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
         }
         InputResult::Consumed | InputResult::NotHandled => {}
     }
+}
+
+/// Push a single-line system message to the message list (toast-style).
+fn push_system_line(state: &mut AppState, text: String) {
+    state.message_list.push(DisplayMessage {
+        role: MessageRole::System,
+        content: vec![RenderedLine {
+            spans: vec![ratatui::text::Span::styled(text, state.theme.secondary)],
+            indent: 0,
+        }],
+        timestamp: Utc::now(),
+        usage: None,
+    });
 }
 
 /// Handle user submitting text.
@@ -476,6 +625,8 @@ fn handle_user_submit(state: &mut AppState, text: String) {
     state.is_agent_working = true;
     state.activity_panel.reset();
     state.token_counter.reset_turn();
+    // Increment turn counter for D3 tool history grouping
+    state.current_turn = state.current_turn.saturating_add(1);
 }
 
 /// Finalize streaming — move rendered content to message list.

@@ -44,13 +44,13 @@ use tokio::sync::mpsc;
 
 use temm1e_agent::agent_task_status::AgentTaskStatus;
 use temm1e_core::config::credentials::{
-    load_active_provider_keys, load_saved_credentials, save_credentials,
+    load_active_provider_keys, load_credentials_file, load_saved_credentials, save_credentials,
 };
 use temm1e_core::types::config::Temm1eConfig;
 use temm1e_core::types::model_registry::default_model;
 
 use agent_bridge::{validate_provider_key, AgentHandle, AgentSetup};
-use app::{update, AppState, Overlay, Screen};
+use app::{update, ApiKeyEntry, AppState, GitInfo, Overlay, Screen};
 use event::Event;
 use onboarding::steps::{model_select_items, OnboardingStep};
 use widgets::select_list::SelectState;
@@ -152,6 +152,10 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
         AppState::new().with_onboarding()
     };
 
+    // Populate startup caches (git repo info, API keys cache)
+    state.git_info = detect_git_info();
+    state.api_keys_cache = load_api_keys_cache();
+
     // Show welcome message if agent is ready
     if agent_handle.is_some() {
         use widgets::markdown::render_markdown_with_width;
@@ -223,6 +227,28 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
             _ = tick_interval.tick() => {
                 update(&mut state, Event::Tick);
             }
+        }
+
+        // Handle mouse capture toggle (A4) — must run on the real stdout
+        if state.needs_mouse_toggle {
+            let mut stdout = io::stdout();
+            if state.mouse_capture_enabled {
+                let _ = execute!(stdout, crossterm::event::EnableMouseCapture);
+            } else {
+                let _ = execute!(stdout, crossterm::event::DisableMouseCapture);
+            }
+            state.needs_mouse_toggle = false;
+        }
+
+        // Handle Escape/Ctrl+C cancel (Tier C) — fire the interrupt flag
+        // that the agent loop polls between rounds.
+        if state.pending_cancel {
+            if let Some(ref handle) = agent_handle {
+                handle
+                    .interrupt_flag
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            state.pending_cancel = false;
         }
 
         // Handle user message submission → send to agent
@@ -430,6 +456,118 @@ fn whoami() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// Detect git repository + branch. Returns `None` if:
+/// - not inside a git repo
+/// - `git` binary is missing
+/// - any subcommand fails
+///
+/// Silent failure by design — status bar degrades gracefully.
+fn detect_git_info() -> Option<GitInfo> {
+    use std::process::Command;
+
+    // Repo toplevel
+    let toplevel = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !toplevel.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(toplevel.stdout).ok()?;
+    let path_trimmed = path.trim();
+    if path_trimmed.is_empty() {
+        return None;
+    }
+    let repo_name = std::path::Path::new(path_trimmed)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+
+    // Branch — three-stage fallback: branch --show-current, symbolic-ref, short hash
+    let mut branch = String::new();
+    if let Ok(out) = Command::new("git")
+        .args(["branch", "--show-current"])
+        .output()
+    {
+        if out.status.success() {
+            branch = String::from_utf8(out.stdout)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+        }
+    }
+    if branch.is_empty() {
+        if let Ok(out) = Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()
+        {
+            if out.status.success() {
+                branch = String::from_utf8(out.stdout)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+            }
+        }
+    }
+    if branch.is_empty() {
+        if let Ok(out) = Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+        {
+            if out.status.success() {
+                let h = String::from_utf8(out.stdout)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !h.is_empty() {
+                    branch = format!("@{h}");
+                }
+            }
+        }
+    }
+    if branch.is_empty() {
+        branch = "(unknown)".to_string();
+    }
+
+    Some(GitInfo { repo_name, branch })
+}
+
+/// Build the API keys cache from the credentials file. Returns an
+/// empty Vec on any error — overlays degrade gracefully.
+fn load_api_keys_cache() -> Vec<ApiKeyEntry> {
+    let Some(creds) = load_credentials_file() else {
+        return Vec::new();
+    };
+    let active = creds.active.clone();
+    creds
+        .providers
+        .iter()
+        .map(|p| {
+            // Pick the first non-placeholder key for the fingerprint; if
+            // all keys are placeholders, use "?" as a marker.
+            let fingerprint = p
+                .keys
+                .iter()
+                .find(|k| !temm1e_core::config::credentials::is_placeholder_key(k) && k.len() >= 4)
+                .map(|k| {
+                    k.chars()
+                        .rev()
+                        .take(4)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                })
+                .unwrap_or_else(|| "????".to_string());
+            ApiKeyEntry {
+                provider: p.name.clone(),
+                fingerprint,
+                is_active: p.name == active,
+            }
+        })
+        .collect()
+}
+
 /// TEA view function — renders AppState to a ratatui frame.
 fn view(state: &AppState, frame: &mut ratatui::Frame) {
     let area = frame.area();
@@ -459,10 +597,13 @@ fn view(state: &AppState, frame: &mut ratatui::Frame) {
                 Overlay::Config(kind) => {
                     views::config_panel::render_config_overlay(
                         kind,
-                        &state.theme,
+                        state,
                         area,
                         frame.buffer_mut(),
                     );
+                }
+                Overlay::CopyPicker => {
+                    widgets::copy_picker::render_copy_picker(state, area, frame.buffer_mut());
                 }
                 Overlay::None => {}
             }

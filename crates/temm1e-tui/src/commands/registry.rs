@@ -34,6 +34,7 @@ pub enum OverlayKind {
     Keys,
     Usage,
     Status,
+    Tools,
 }
 
 /// Handler function type for slash commands.
