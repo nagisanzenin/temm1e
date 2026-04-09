@@ -45,15 +45,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux server binary (musl, static, no desktop-control)
+          # Linux x86_64 server binary (musl, static, no desktop-control)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             artifact: temm1e-x86_64-linux
             desktop: false
-          # Linux desktop binary (glibc, WITH desktop-control)
+          # Linux x86_64 desktop binary (glibc, WITH desktop-control)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04      # glibc 2.39 — runs on Ubuntu 24.04+. Needs PipeWire 0.3.65+ headers.
             artifact: temm1e-x86_64-linux-desktop
+            desktop: true
+          # Linux ARM64 server binary — Raspberry Pi 4/5 (64-bit Pi OS), AWS Graviton, Oracle Ampere
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            artifact: temm1e-aarch64-linux
+            desktop: false
+          # Linux ARM64 desktop binary (glibc, WITH desktop-control)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            artifact: temm1e-aarch64-linux-desktop
             desktop: true
           # macOS (both include desktop-control via defaults)
           - target: x86_64-apple-darwin
@@ -73,7 +83,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools (Linux musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: contains(matrix.target, '-linux-musl')
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools perl make
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
@@ -101,13 +111,13 @@ jobs:
 
       - name: Build release binary
         run: |
-          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+          if [[ "${{ matrix.target }}" == *-linux-musl ]]; then
             # Musl: no desktop-control (system libs can't static-link)
             cargo build --release --target ${{ matrix.target }} --bin temm1e \
               --no-default-features \
-              --features telegram,discord,browser,mcp,codex-oauth,openssl-vendored
+              --features telegram,discord,browser,mcp,codex-oauth,tui,openssl-vendored
           else
-            # macOS + Linux glibc: default features (includes desktop-control)
+            # macOS + Linux glibc: default features (includes desktop-control + tui)
             cargo build --release --target ${{ matrix.target }}
           fi
 

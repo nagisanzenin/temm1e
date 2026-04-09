@@ -131,6 +131,114 @@ else
     warn "Could not download checksums — skipping verification"
 fi
 
+# ────────────────────────────────────────────────────────────────────────
+# Linux desktop binary — runtime library check
+# ────────────────────────────────────────────────────────────────────────
+# The Linux desktop binary is dynamically linked against Wayland, X11,
+# PipeWire, XCB and friends via enigo + xcap. On minimal Ubuntu, WSL,
+# Docker, or server installs these runtime libs are often missing.
+# Detect that before copying the binary into place so the user is never
+# left with a broken executable — either help them install the deps or
+# fall back to the static musl server binary.
+# ────────────────────────────────────────────────────────────────────────
+if [ "$PLATFORM" = "linux" ]; then
+    case "$ARTIFACT" in
+        *-desktop)
+            if command -v ldd >/dev/null 2>&1; then
+                MISSING_LIBS=$(ldd "${TMPDIR}/${ARTIFACT}" 2>/dev/null \
+                    | awk '/not found/ {print $1}' \
+                    | sort -u)
+            else
+                MISSING_LIBS=""
+            fi
+
+            if [ -n "$MISSING_LIBS" ]; then
+                echo ""
+                warn "Desktop binary needs system libraries that are not installed:"
+                for lib in $MISSING_LIBS; do
+                    printf "    - %s\n" "$lib"
+                done
+                echo ""
+
+                DEPS_CMD=""
+                if command -v apt-get >/dev/null 2>&1; then
+                    DEPS_CMD="sudo apt-get update && sudo apt-get install -y libwayland-client0 libwayland-cursor0 libwayland-egl1 libxcb1 libxcb-randr0 libxcb-shm0 libxkbcommon0 libpipewire-0.3-0 libspa-0.2-modules libegl1 libgbm1 libdrm2 libxdo3 libdbus-1-3 libxrandr2"
+                elif command -v dnf >/dev/null 2>&1; then
+                    DEPS_CMD="sudo dnf install -y wayland-libs-client libxkbcommon libxcb pipewire-libs mesa-libEGL mesa-libgbm libdrm dbus-libs libXrandr libxdo"
+                elif command -v pacman >/dev/null 2>&1; then
+                    DEPS_CMD="sudo pacman -S --needed wayland libxkbcommon libxcb pipewire mesa libdrm dbus libxrandr xdotool"
+                fi
+
+                RESOLVED=false
+                if [ -n "$DEPS_CMD" ]; then
+                    echo "  Install command:"
+                    echo ""
+                    printf "    %s\n" "$DEPS_CMD"
+                    echo ""
+                    if [ -r /dev/tty ]; then
+                        printf "  Install them now via sudo? [Y/n] "
+                        read -r ANSWER </dev/tty || ANSWER=""
+                        case "${ANSWER:-y}" in
+                            y|Y|yes|YES|Yes|"")
+                                info "Installing system libraries..."
+                                if sh -c "$DEPS_CMD"; then
+                                    REMAINING=$(ldd "${TMPDIR}/${ARTIFACT}" 2>/dev/null \
+                                        | awk '/not found/ {print $1}')
+                                    if [ -z "$REMAINING" ]; then
+                                        info "All system libraries resolved"
+                                        RESOLVED=true
+                                    else
+                                        warn "Some libraries still missing after install:"
+                                        for lib in $REMAINING; do
+                                            printf "    - %s\n" "$lib"
+                                        done
+                                    fi
+                                else
+                                    warn "Dependency install failed"
+                                fi
+                                ;;
+                        esac
+                    else
+                        warn "Running non-interactively — cannot prompt for sudo."
+                        warn "Run the command above manually, then re-run the installer."
+                    fi
+                else
+                    warn "No supported package manager (apt/dnf/pacman) detected."
+                fi
+
+                if [ "$RESOLVED" != "true" ]; then
+                    echo ""
+                    info "Falling back to the server (musl) binary — desktop control disabled."
+                    info "Install the libraries above and re-run this script to upgrade."
+                    FALLBACK_NAME="${BINARY_NAME}-${ARCH_TAG}-${PLATFORM}"
+                    FALLBACK_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${FALLBACK_NAME}"
+                    if ! curl -sSfL -o "${TMPDIR}/${FALLBACK_NAME}" "$FALLBACK_URL"; then
+                        error "Failed to download fallback binary from ${FALLBACK_URL}"
+                    fi
+                    # Verify fallback checksum if the checksum file was fetched
+                    if [ -f "${TMPDIR}/checksums.txt" ]; then
+                        EXPECTED=$(grep "${FALLBACK_NAME}" "${TMPDIR}/checksums.txt" | awk '{print $1}')
+                        if [ -n "$EXPECTED" ]; then
+                            if command -v sha256sum >/dev/null 2>&1; then
+                                ACTUAL=$(sha256sum "${TMPDIR}/${FALLBACK_NAME}" | awk '{print $1}')
+                            elif command -v shasum >/dev/null 2>&1; then
+                                ACTUAL=$(shasum -a 256 "${TMPDIR}/${FALLBACK_NAME}" | awk '{print $1}')
+                            else
+                                ACTUAL="$EXPECTED"
+                            fi
+                            if [ "$EXPECTED" != "$ACTUAL" ]; then
+                                error "Fallback checksum mismatch! Expected ${EXPECTED}, got ${ACTUAL}"
+                            fi
+                            info "Fallback checksum verified"
+                        fi
+                    fi
+                    ARTIFACT="$FALLBACK_NAME"
+                fi
+            fi
+            ;;
+    esac
+fi
+
 # Install
 mkdir -p "$INSTALL_DIR"
 if [ "$GLOBAL" = true ]; then
@@ -147,7 +255,8 @@ if "${INSTALL_DIR}/${BINARY_NAME}" --version >/dev/null 2>&1; then
     VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>&1 || echo "unknown")
     info "Installed: ${VERSION}"
 else
-    info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
+    warn "Installed to ${INSTALL_DIR}/${BINARY_NAME} but --version failed."
+    warn "Run it manually to see the error:  ${INSTALL_DIR}/${BINARY_NAME} --version"
 fi
 
 # Check PATH

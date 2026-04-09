@@ -6,7 +6,7 @@
   <a href="https://github.com/nagisanzenin/temm1e/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/temm1e?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.com/invite/temm1e"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-4.7.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-4.7.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
@@ -15,7 +15,7 @@
 <h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever. <strong>Now grows itself.</strong></h3>
 
 <p align="center">
-  <code>118K lines</code> · <code>2,307 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>24 crates</code> · <code>full computer use</code> · <code>cambium self-grow</code>
+  <code>124K lines</code> · <code>2,307 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>24 crates</code> · <code>full computer use</code> · <code>cambium self-grow</code>
 </p>
 
 <p align="center"><strong>Powered by 13 layers of self-learning mechanism + 1 self-growing mechanism</strong></p>
@@ -43,7 +43,7 @@ My brain has a BUDGET and I am VERY responsible with it.
 > **Quick start** — interactive TUI, no external services needed:
 > ```bash
 > git clone https://github.com/nagisanzenin/temm1e.git && cd temm1e
-> cargo build --release --features tui
+> cargo build --release
 > ./target/release/temm1e tui
 > ```
 > First run walks you through provider setup with an arrow-key wizard.
@@ -843,7 +843,7 @@ temm1e-watchdog (separate binary)
 <td align="center"><strong>15 MB</strong><br><sub>Idle RAM</sub></td>
 <td align="center"><strong>31 ms</strong><br><sub>Cold start</sub></td>
 <td align="center"><strong>9.6 MB</strong><br><sub>Binary size</sub></td>
-<td align="center"><strong>2,098</strong><br><sub>Tests</sub></td>
+<td align="center"><strong>2,307</strong><br><sub>Tests</sub></td>
 <td align="center"><strong>9</strong><br><sub>AI Providers</sub></td>
 <td align="center"><strong>15</strong><br><sub>Built-in tools</sub></td>
 <td align="center"><strong>7</strong><br><sub>Channels</sub></td>
@@ -873,14 +873,23 @@ temm1e setup    # Interactive wizard: channel + provider
 temm1e start    # Go live
 ```
 
+The installer auto-detects macOS, Linux (x86_64 + aarch64) and picks the right binary. On Linux it also runs an `ldd` check and — if the desktop binary is missing system libraries on your distro — offers to install them via `apt`/`dnf`/`pacman` or falls back to the static server binary. You are never left with a broken executable.
+
+**Raspberry Pi / ARM64:** Pre-built `aarch64-linux` binaries (musl server + glibc desktop) ship with every release. On 64-bit Pi OS just run the one-liner above — the installer picks up `aarch64` automatically. 32-bit Pi OS is not supported; use 64-bit.
+
 **From source:**
 
 ```bash
 git clone https://github.com/nagisanzenin/temm1e.git && cd temm1e
+# Linux only — install all system libraries (Wayland, X11, PipeWire, XCB)
+sh scripts/install-linux-deps.sh            # apt / dnf / pacman auto-detected
 cargo build --release
 ./target/release/temm1e setup   # Interactive wizard
 ./target/release/temm1e start
 ```
+
+> macOS has everything it needs via Xcode Command Line Tools — no extra deps script.
+> On Linux, `install-linux-deps.sh --runtime` installs only the shared libraries needed to RUN pre-built binaries, and `--build` installs only the headers needed to COMPILE. The default installs both.
 
 **WhatsApp Web** (scan QR, bot runs as your linked device):
 
@@ -916,7 +925,7 @@ docker run -d --name temm1e \
 
 ```
 temm1e setup                 Interactive first-time setup wizard
-temm1e tui                   Interactive TUI (--features tui)
+temm1e tui                   Interactive TUI — Claude-Code-style full-screen experience
 temm1e start                 Start the gateway (foreground or -d for daemon)
 temm1e start --personality none  No personality, minimal identity prompt
 temm1e stop                  Graceful shutdown
@@ -971,6 +980,8 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
 <summary><strong>Release Timeline</strong> — every version from first breath to now</summary>
 
 ```
+2026-04-09  v4.7.1  ●━━━ Bulletproof Linux install + ARM64 targets + TUI in default features. install.sh now runs an `ldd` check against the downloaded Linux desktop binary, detects missing Wayland/X11/PipeWire/XCB runtime libs, prints the exact apt/dnf/pacman install command, and — via `/dev/tty` prompt so it works under `curl | sh` — offers to install them with sudo or falls back to the static musl server binary. No user is ever left with a broken executable. New `scripts/install-linux-deps.sh` one-shot system dep installer supports `--runtime` (run pre-built), `--build` (compile from source), or both (default), with apt/dnf/pacman auto-detection matching CI. Release matrix expanded with `aarch64-unknown-linux-musl` + `aarch64-unknown-linux-gnu` targets on the free `ubuntu-24.04-arm` runners — Raspberry Pi 4/5 (64-bit Pi OS), AWS Graviton, Oracle Ampere, and M-series Linux now install via the same `curl | sh` one-liner. TUI promoted to default features — every pre-built binary now ships `temm1e tui` without needing `--features tui` at build time (+1.8 MB release binary, well under the 30 MB musl size gate). Fixes #32 (Raspberry Pi user blocked by missing ARM release + Wayland cross-compile pain). 24 crates, 2,307 tests.
+                    │
 2026-04-08  v4.7.0  ●━━━ Cambium — gap-driven self-grow capability. Tem can now extend its own runtime by writing Rust code, verifying through a deterministic harness, and deploying via blue-green binary swap with automatic rollback. Named after the biological cambium (the growth layer under tree bark): heartwood = immutable kernel (vault, traits, security, the pipeline itself), cambium = growth layer (tools, skills, cores, integrations), bark = runtime surface, rings = GrowthSession history. Five phases: (0) theory + codebase self-model in docs/lab/cambium/, (1) CambiumConfig + GrowthTrigger/Kind/TrustLevel/PipelineStage types, (2) temm1e-cambium crate with zone_checker/trust/budget/history/sandbox/pipeline/deploy modules, (3) skill-layer growth via SelfWorkKind::CambiumSkills + grow_skills() handler with 24h rate limit + path traversal sanitization + JSON extractor for markdown-fenced LLM responses, (4) code pipeline with dedicated git-clone sandbox isolation at ~/.temm1e/cambium/sandbox/ + TemDOS cambium-reviewer + cambium-auditor cores, (5) blue-green binary swap with try_wait crash detection + macOS code-signing safe inode replacement + zombie-aware is_process_alive + temm1e-watchdog supervisor binary in immutable kernel. Trust hierarchy: 4 levels with earned-autonomy state machine (10 successful Level 3 changes -> autonomous, 25 Level 2 -> autonomous, 3 rollbacks in 7 days -> all locked). Real-LLM verified end-to-end with Gemini 3 Flash (5.8s, 1 skill, $0.001) and Sonnet 4.6 (12.8s, 2 skills, $0.01). Both produced valid YAML-frontmatter skills loadable by SkillRegistry. Enabled by default; toggle via /cambium on / /cambium off. Research paper: tems_lab/cambium/CAMBIUM_RESEARCH_PAPER.md. Theory: docs/lab/cambium/THEORY.md. 24 crates, 2274 tests.
                     │
 2026-04-07  v4.6.1  ●━━━ Mission Control — interceptor v2 for Perpetuum harmony. Replaced single-task interceptor with phase-aware, Perpetuum-aware Mission Control system. Real-time agent status observation wired end-to-end (AgentTaskPhase::Display, status_tx per-slot instead of per-message, _status_rx no longer dropped). 4-way LLM classification: [AMEND] routes to pending queue (tool result injection), [QUEUE] routes to new order queue (processed after current task), [CANCEL] interrupts, [CHAT] consumed. /status fast-path: instant phase + Perpetuum + queue report (zero LLM cost). /queue fast-path: shows queued orders. Heartbeat fix: current_task no longer poisoned by heartbeat text, interceptor skips heartbeat tasks. Per-task CancellationToken via child_token() fixes stale-token bug. Order queue drain after task completion. LLM failure fallback (conservative amendment + hardcoded ack). Design doc: docs/design/MISSION_CONTROL.md. 22 crates, 2127 tests.
