@@ -77,11 +77,11 @@ pub fn render_help(registry: &CommandRegistry, theme: &Theme, area: Rect, buf: &
     lines.push(Line::from(Span::styled("  Copy & Cancel", theme.heading)));
     lines.push(Line::from(""));
     for (key, desc) in &[
-        ("Esc", "Cancel Tem mid-task · close overlay"),
-        ("Ctrl+C", "Cancel Tem · press twice to quit"),
-        ("Drag (mouse)", "Select text — release to copy to clipboard"),
-        ("Click", "Clear the current selection"),
+        ("Drag (mouse)", "Select text — release to keep selection"),
+        ("Ctrl+C", "Copy selection · else cancel Tem · 2× quit"),
+        ("Click code", "Click inside any code block → copy it whole"),
         ("Ctrl+Y", "Yank a code block to clipboard (numbered picker)"),
+        ("Esc", "Clear selection · close overlay · cancel Tem"),
         ("Alt+S", "Toggle mouse capture (lets terminal handle mouse)"),
     ] {
         lines.push(shortcut(theme, key, desc));

@@ -210,6 +210,8 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
     // mouse drag events don't pile up into back-to-back full
     // re-renders. Deferred draws catch up via the tick interval
     // (every 33ms), so the final frame after a drag always happens.
+    // Combined with the event-coalescing drain in the event loop,
+    // this keeps drag responsiveness smooth even on slower terminals.
     let mut last_draw_at = std::time::Instant::now();
     const MIN_DRAW_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -244,6 +246,24 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
             // Tick timer
             _ = tick_interval.tick() => {
                 update(&mut state, Event::Tick);
+            }
+        }
+
+        // ── Event coalescing — drain any immediately-available
+        // terminal events so a burst of mouse Drag events (drag
+        // speed can exceed 120 Hz) collapses into a single draw
+        // instead of one draw per event. The draw throttle below
+        // provides the final rate cap; this drain prevents
+        // unnecessary intermediate state updates that would just
+        // be overwritten. Max 128 events per drain to keep the
+        // loop responsive to other event sources.
+        use futures::FutureExt;
+        for _ in 0..128 {
+            match crossterm_events.next().now_or_never() {
+                Some(Some(Ok(event))) => {
+                    update(&mut state, Event::Terminal(event));
+                }
+                _ => break,
             }
         }
 
@@ -745,17 +765,20 @@ fn view(state: &mut AppState, frame: &mut ratatui::Frame) {
         }
     }
 
-    // ── Mouse selection: highlight + optional copy on release ─
+    // ── Mouse selection: highlight + optional copy on Ctrl+C ─
     // Runs after all other rendering so it overlays the final buffer.
-    // Extracts text from the just-rendered cells on pending_copy, then
-    // applies a REVERSED-style highlight so the user sees the range.
+    // Extracts text from the just-rendered cells on pending_copy_selection,
+    // then applies a REVERSED-style highlight so the user sees the range.
+    //
+    // Selection now PERSISTS on mouse release. It clears on
+    // Ctrl+C (after copy), Escape, or a new click.
     if let Some(sel) = state.mouse_selection.clone() {
         let buf = frame.buffer_mut();
         let (start, end) = normalized_selection(&sel, buf.area);
 
-        // Extract BEFORE highlighting so the highlight doesn't need
-        // to be undone for the extraction — symbol content is
-        // independent of style modifiers.
+        // Extract BEFORE highlighting — symbol content is independent
+        // of style modifiers, so order doesn't matter for correctness,
+        // but doing extract first makes the logic clearer.
         if state.pending_copy_selection {
             state.pending_copy_selection = false;
             let text = extract_selection_text(buf, start, end);
@@ -772,12 +795,34 @@ fn view(state: &mut AppState, frame: &mut ratatui::Frame) {
                 }
             }
             // Clear the selection after copy so the highlight goes
-            // away on the NEXT frame (we still render this frame
-            // with the highlight so the user sees what was copied).
+            // away on the NEXT frame.
             state.mouse_selection = None;
             highlight_selection_cells(buf, start, end);
         } else {
             highlight_selection_cells(buf, start, end);
+        }
+    }
+
+    // ── Single-click on a code block → copy whole block ────
+    // Runs AFTER the selection pass so click-to-copy can still
+    // fire even if the user previously had a selection that
+    // Mouse::Down cleared on the same frame.
+    if let Some((_col, row)) = state.pending_code_click.take() {
+        let buf = frame.buffer_mut();
+        if let Some((top_row, bot_row, text)) = extract_code_block_at(buf, row) {
+            match widgets::copy_picker::copy_to_clipboard(&text) {
+                Ok(()) => {
+                    let line_count = text.lines().count();
+                    state.copy_feedback =
+                        Some(format!("Copied {line_count} lines of code to clipboard"));
+                    // Flash the entire block with REVERSED highlight
+                    // for this frame so the user sees what was copied.
+                    highlight_code_block(buf, top_row, bot_row);
+                }
+                Err(e) => {
+                    state.copy_feedback = Some(format!("Copy failed: {e}"));
+                }
+            }
         }
     }
 }
@@ -885,6 +930,86 @@ fn extract_selection_text(
     }
 
     rows.join("\n")
+}
+
+/// Detect whether `row` is inside a rendered code block (identified
+/// by the ` │ ` gutter prefix added by `widgets/markdown.rs`), and
+/// if so, walk up/down to find the block's extent and extract the
+/// gutter-stripped code. Returns `(top_row, bot_row, text)` on hit.
+fn extract_code_block_at(buf: &ratatui::buffer::Buffer, row: u16) -> Option<(u16, u16, String)> {
+    let left = buf.area.left();
+    let right = buf.area.right();
+    let top_edge = buf.area.top();
+    let bot_edge = buf.area.bottom();
+
+    if buf.area.width < 3 {
+        return None;
+    }
+
+    // A code row has ` │ ` (U+0020 U+2502 U+0020) as its first 3 cells.
+    let is_code_row = |y: u16| -> bool {
+        if y < top_edge || y >= bot_edge {
+            return false;
+        }
+        buf[(left, y)].symbol() == " "
+            && buf[(left + 1, y)].symbol() == "\u{2502}"
+            && buf[(left + 2, y)].symbol() == " "
+    };
+
+    if !is_code_row(row) {
+        return None;
+    }
+
+    // Walk up while rows are still code rows
+    let mut top = row;
+    while top > top_edge && is_code_row(top - 1) {
+        top -= 1;
+    }
+    // Walk down
+    let mut bot = row;
+    while bot + 1 < bot_edge && is_code_row(bot + 1) {
+        bot += 1;
+    }
+
+    // Extract: for each row, skip the ` │ ` prefix (3 cells) and
+    // capture content up to the right edge, trimming trailing spaces.
+    let content_start = left + 3;
+    let mut out = String::new();
+    for y in top..=bot {
+        let mut line = String::new();
+        for x in content_start..right {
+            line.push_str(buf[(x, y)].symbol());
+        }
+        out.push_str(line.trim_end());
+        if y < bot {
+            out.push('\n');
+        }
+    }
+
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some((top, bot, out))
+    }
+}
+
+/// Apply REVERSED to every cell of a code block's rendered rows
+/// (including the gutter prefix). Used as a visual flash when the
+/// user clicks to copy a block.
+fn highlight_code_block(buf: &mut ratatui::buffer::Buffer, top: u16, bot: u16) {
+    use ratatui::style::Modifier;
+    let left = buf.area.left();
+    let right = buf.area.right();
+    for y in top..=bot {
+        if y >= buf.area.bottom() {
+            break;
+        }
+        for x in left..right {
+            let cell = &mut buf[(x, y)];
+            let style = cell.style();
+            cell.set_style(style.add_modifier(Modifier::REVERSED));
+        }
+    }
 }
 
 /// Apply a REVERSED style modifier to every cell in the selection

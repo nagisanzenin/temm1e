@@ -57,7 +57,7 @@ fn hint_for_state(state: &AppState) -> &'static str {
 
     // Active drag selection — show in-flight state
     if state.mouse_selection.is_some() {
-        return "SELECTING · drag to extend · release to copy · click to clear";
+        return "SELECTED · ^C copy · Esc clear · click elsewhere to clear";
     }
 
     // Raw select mode (mouse capture disabled via Alt+S) — terminal

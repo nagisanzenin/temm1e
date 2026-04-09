@@ -135,12 +135,19 @@ pub struct AppState {
     pub pending_model_switch: Option<String>,
 
     // Mouse-driven native drag-to-select (post-hotfix polish)
-    /// Current drag selection. `None` when no active selection.
+    /// Current drag selection. Persists after Mouse::Up so the user
+    /// can press Ctrl+C (or click elsewhere) to finalize. `None` when
+    /// no active selection.
     pub mouse_selection: Option<MouseSelection>,
-    /// Set on Mouse::Up after a real drag. The view layer picks it up
-    /// on the next render, extracts the selected cell symbols, copies
-    /// to clipboard, and clears the selection.
+    /// Set by Ctrl+C when there is an active selection. The view
+    /// layer picks it up on the next render, extracts the selected
+    /// cell symbols, copies to clipboard, and clears the selection.
     pub pending_copy_selection: bool,
+    /// A single-click position. Set on Mouse::Up when the user
+    /// clicked without dragging. The view layer checks whether the
+    /// clicked row is inside a rendered code block and, if so,
+    /// copies the whole block.
+    pub pending_code_click: Option<(u16, u16)>,
     /// Transient feedback shown in the hint bar after a copy. Cleared
     /// on the next mouse interaction.
     pub copy_feedback: Option<String>,
@@ -203,6 +210,7 @@ impl AppState {
             pending_model_switch: None,
             mouse_selection: None,
             pending_copy_selection: false,
+            pending_code_click: None,
             copy_feedback: None,
             command_registry: CommandRegistry::new(),
             theme,
@@ -296,12 +304,14 @@ pub fn update(state: &mut AppState, event: Event) {
                 MouseEventKind::Up(MouseButton::Left) => {
                     if let Some(sel) = state.mouse_selection.as_ref() {
                         if sel.anchor == sel.current {
-                            // Pure click with no drag — clear selection
+                            // Pure click — clear the existing selection
+                            // and record the click for the view to
+                            // check against code-block bounds.
                             state.mouse_selection = None;
-                        } else {
-                            // Real drag — request the view to extract + copy
-                            state.pending_copy_selection = true;
+                            state.pending_code_click = Some((mouse.column, mouse.row));
                         }
+                        // Real drag — keep selection alive until the
+                        // user presses Ctrl+C or clicks elsewhere.
                         state.needs_redraw = true;
                     }
                 }
@@ -509,7 +519,13 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
             handle_user_submit(state, text);
         }
         InputResult::Interrupt => {
-            if state.is_agent_working {
+            if state.mouse_selection.is_some() {
+                // Active selection + Ctrl+C → copy selection (standard
+                // text-editor UX). The view layer will extract, copy,
+                // and clear the selection on the next render.
+                state.pending_copy_selection = true;
+                state.last_ctrl_c = None;
+            } else if state.is_agent_working {
                 // Tier C: fire the real interrupt flag via lib.rs event loop
                 state.pending_cancel = true;
                 state.last_ctrl_c = None;
@@ -554,11 +570,15 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
             state.message_list.scroll_down(page);
         }
         InputResult::Escape => {
-            // Tier C: Escape cancels a running task
-            if state.is_agent_working {
-                state.pending_cancel = true;
-            } else {
+            // Priority order: clear selection → close overlay →
+            // cancel working agent → no-op
+            if state.mouse_selection.is_some() {
+                state.mouse_selection = None;
+                state.copy_feedback = None;
+            } else if state.overlay != Overlay::None {
                 state.overlay = Overlay::None;
+            } else if state.is_agent_working {
+                state.pending_cancel = true;
             }
         }
         InputResult::YankCodeBlock => {
