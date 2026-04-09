@@ -50,7 +50,7 @@ use temm1e_core::types::config::Temm1eConfig;
 use temm1e_core::types::model_registry::default_model;
 
 use agent_bridge::{validate_provider_key, AgentHandle, AgentSetup};
-use app::{update, ApiKeyEntry, AppState, GitInfo, Overlay, Screen};
+use app::{update, ApiKeyEntry, AppState, GitInfo, MouseSelection, Overlay, Screen};
 use event::Event;
 use onboarding::steps::{model_select_items, OnboardingStep};
 use widgets::select_list::SelectState;
@@ -203,7 +203,7 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // 6. Initial draw
-    terminal.draw(|frame| view(&state, frame))?;
+    terminal.draw(|frame| view(&mut state, frame))?;
     state.needs_redraw = false;
 
     // 7. Main event loop
@@ -305,7 +305,7 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
 
         // Render if needed
         if state.needs_redraw {
-            terminal.draw(|frame| view(&state, frame))?;
+            terminal.draw(|frame| view(&mut state, frame))?;
             state.needs_redraw = false;
         }
     }
@@ -692,7 +692,11 @@ fn load_api_keys_cache() -> Vec<ApiKeyEntry> {
 }
 
 /// TEA view function — renders AppState to a ratatui frame.
-fn view(state: &AppState, frame: &mut ratatui::Frame) {
+///
+/// Takes `&mut AppState` so the post-render selection pass can:
+/// - extract cell symbols when a drag-to-select just ended, and
+/// - clear the corresponding pending flags.
+fn view(state: &mut AppState, frame: &mut ratatui::Frame) {
     let area = frame.area();
 
     match state.screen {
@@ -730,6 +734,131 @@ fn view(state: &AppState, frame: &mut ratatui::Frame) {
                 }
                 Overlay::None => {}
             }
+        }
+    }
+
+    // ── Mouse selection: highlight + optional copy on release ─
+    // Runs after all other rendering so it overlays the final buffer.
+    // Extracts text from the just-rendered cells on pending_copy, then
+    // applies a REVERSED-style highlight so the user sees the range.
+    if let Some(sel) = state.mouse_selection.clone() {
+        let buf = frame.buffer_mut();
+        let (start, end) = normalized_selection(&sel, buf.area);
+
+        // Extract BEFORE highlighting so the highlight doesn't need
+        // to be undone for the extraction — symbol content is
+        // independent of style modifiers.
+        if state.pending_copy_selection {
+            state.pending_copy_selection = false;
+            let text = extract_selection_text(buf, start, end);
+            if !text.trim().is_empty() {
+                match widgets::copy_picker::copy_to_clipboard(&text) {
+                    Ok(()) => {
+                        let char_count = text.trim().chars().count();
+                        state.copy_feedback =
+                            Some(format!("Copied {char_count} chars to clipboard"));
+                    }
+                    Err(e) => {
+                        state.copy_feedback = Some(format!("Copy failed: {e}"));
+                    }
+                }
+            }
+            // Clear the selection after copy so the highlight goes
+            // away on the NEXT frame (we still render this frame
+            // with the highlight so the user sees what was copied).
+            state.mouse_selection = None;
+            highlight_selection_cells(buf, start, end);
+        } else {
+            highlight_selection_cells(buf, start, end);
+        }
+    }
+}
+
+/// Normalize a `MouseSelection` into a (start, end) pair in reading
+/// order (earlier cell first) and clamp both to the buffer area.
+fn normalized_selection(
+    sel: &MouseSelection,
+    area: ratatui::layout::Rect,
+) -> ((u16, u16), (u16, u16)) {
+    let clamp = |(x, y): (u16, u16)| -> (u16, u16) {
+        let right = area.right().saturating_sub(1).max(area.left());
+        let bottom = area.bottom().saturating_sub(1).max(area.top());
+        (x.clamp(area.left(), right), y.clamp(area.top(), bottom))
+    };
+    let a = clamp(sel.anchor);
+    let c = clamp(sel.current);
+    // Reading order: earlier row first; within same row, earlier column.
+    if (a.1, a.0) <= (c.1, c.0) {
+        (a, c)
+    } else {
+        (c, a)
+    }
+}
+
+/// Extract the selected cell symbols as plain text. Each row is
+/// trimmed of trailing spaces (terminal cells are padded) and
+/// separated by `\n`. UTF-8 safe because `Cell::symbol()` returns a
+/// complete grapheme per cell.
+fn extract_selection_text(
+    buf: &ratatui::buffer::Buffer,
+    start: (u16, u16),
+    end: (u16, u16),
+) -> String {
+    let mut out = String::new();
+    let left_edge = buf.area.left();
+    let right_edge = buf.area.right();
+    let bottom_edge = buf.area.bottom();
+
+    for y in start.1..=end.1 {
+        if y >= bottom_edge {
+            break;
+        }
+        let x_start = if y == start.1 { start.0 } else { left_edge };
+        let x_end = if y == end.1 {
+            (end.0.saturating_add(1)).min(right_edge)
+        } else {
+            right_edge
+        };
+        let mut row = String::new();
+        for x in x_start..x_end {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        let trimmed = row.trim_end();
+        out.push_str(trimmed);
+        if y < end.1 && y + 1 < bottom_edge {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Apply a REVERSED style modifier to every cell in the selection
+/// range. This is the standard "inverted" look users expect from
+/// terminal selections. Purely visual — does not affect the symbols.
+fn highlight_selection_cells(
+    buf: &mut ratatui::buffer::Buffer,
+    start: (u16, u16),
+    end: (u16, u16),
+) {
+    use ratatui::style::Modifier;
+    let left_edge = buf.area.left();
+    let right_edge = buf.area.right();
+    let bottom_edge = buf.area.bottom();
+
+    for y in start.1..=end.1 {
+        if y >= bottom_edge {
+            break;
+        }
+        let x_start = if y == start.1 { start.0 } else { left_edge };
+        let x_end = if y == end.1 {
+            (end.0.saturating_add(1)).min(right_edge)
+        } else {
+            right_edge
+        };
+        for x in x_start..x_end {
+            let cell = &mut buf[(x, y)];
+            let current = cell.style();
+            cell.set_style(current.add_modifier(Modifier::REVERSED));
         }
     }
 }

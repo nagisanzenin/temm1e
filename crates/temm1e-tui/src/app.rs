@@ -71,6 +71,21 @@ pub struct ToolCallRecord {
     pub result_preview: Option<String>,
 }
 
+/// Active mouse selection on the rendered buffer.
+///
+/// `anchor` is where the left button first went down. `current` is the
+/// most recent drag position. Both are buffer cell coordinates (x =
+/// column, y = row), absolute to the full terminal area.
+///
+/// The view layer renders a REVERSED highlight over the cells in the
+/// range and, on `Mouse::Up`, extracts the cell symbols and drops the
+/// resulting text into the system clipboard.
+#[derive(Debug, Clone)]
+pub struct MouseSelection {
+    pub anchor: (u16, u16),
+    pub current: (u16, u16),
+}
+
 /// Root application state (TEA model).
 pub struct AppState {
     pub screen: Screen,
@@ -118,6 +133,17 @@ pub struct AppState {
 
     // Model hot-swap (bug 4 fix)
     pub pending_model_switch: Option<String>,
+
+    // Mouse-driven native drag-to-select (post-hotfix polish)
+    /// Current drag selection. `None` when no active selection.
+    pub mouse_selection: Option<MouseSelection>,
+    /// Set on Mouse::Up after a real drag. The view layer picks it up
+    /// on the next render, extracts the selected cell symbols, copies
+    /// to clipboard, and clears the selection.
+    pub pending_copy_selection: bool,
+    /// Transient feedback shown in the hint bar after a copy. Cleared
+    /// on the next mouse interaction.
+    pub copy_feedback: Option<String>,
 
     // Commands
     pub command_registry: CommandRegistry,
@@ -175,6 +201,9 @@ impl AppState {
             current_turn: 0,
             pending_cancel: false,
             pending_model_switch: None,
+            mouse_selection: None,
+            pending_copy_selection: false,
+            copy_feedback: None,
             command_registry: CommandRegistry::new(),
             theme,
             onboarding_step: OnboardingStep::Welcome,
@@ -232,8 +261,37 @@ pub fn update(state: &mut AppState, event: Event) {
             state.needs_redraw = true;
         }
         Event::Terminal(crossterm::event::Event::Mouse(mouse)) => {
-            use crossterm::event::MouseEventKind;
+            use crossterm::event::{MouseButton, MouseEventKind};
             match mouse.kind {
+                // ── Drag-to-select (native selection inside the TUI) ─
+                MouseEventKind::Down(MouseButton::Left) => {
+                    // Fresh selection — clears any previous one
+                    state.mouse_selection = Some(MouseSelection {
+                        anchor: (mouse.column, mouse.row),
+                        current: (mouse.column, mouse.row),
+                    });
+                    state.copy_feedback = None;
+                    state.needs_redraw = true;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some(ref mut sel) = state.mouse_selection {
+                        sel.current = (mouse.column, mouse.row);
+                        state.needs_redraw = true;
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(sel) = state.mouse_selection.as_ref() {
+                        if sel.anchor == sel.current {
+                            // Pure click with no drag — clear selection
+                            state.mouse_selection = None;
+                        } else {
+                            // Real drag — request the view to extract + copy
+                            state.pending_copy_selection = true;
+                        }
+                        state.needs_redraw = true;
+                    }
+                }
+                // ── Scroll wheel (unchanged) ─────────────────────────
                 MouseEventKind::ScrollUp => {
                     state.message_list.scroll_up(3);
                     state.needs_redraw = true;

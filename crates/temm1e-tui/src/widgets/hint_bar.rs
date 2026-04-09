@@ -16,6 +16,18 @@ pub fn render_hint_bar(state: &AppState, area: Rect, buf: &mut Buffer) {
         return;
     }
 
+    // Transient copy feedback wins over the contextual hint — users
+    // get an immediate confirmation that drag-to-select + release
+    // actually copied to the clipboard.
+    if let Some(ref feedback) = state.copy_feedback {
+        let line = Line::from(Span::styled(
+            format!(" ✓ {feedback}"),
+            state.theme.phase_done.add_modifier(Modifier::DIM),
+        ));
+        buf.set_line(area.left(), area.top(), &line, area.width);
+        return;
+    }
+
     let hint = hint_for_state(state);
     let line = Line::from(Span::styled(
         format!(" {}", hint),
@@ -43,11 +55,17 @@ fn hint_for_state(state: &AppState) -> &'static str {
         return "Esc cancel · ^O activity · ^C cancel (×2 quit)";
     }
 
-    // Raw select mode (mouse capture disabled via Alt+S)
-    if !state.mouse_capture_enabled {
-        return "SELECT MODE · drag to copy · Alt+S re-enable · ^O activity";
+    // Active drag selection — show in-flight state
+    if state.mouse_selection.is_some() {
+        return "SELECTING · drag to extend · release to copy · click to clear";
     }
 
-    // Idle default (mouse capture ON, exclusive TUI)
-    "Enter submit · ^C cancel · ^Y yank · Shift+drag copy · ^O activity · ? help"
+    // Raw select mode (mouse capture disabled via Alt+S) — terminal
+    // handles selection natively, we show nothing special
+    if !state.mouse_capture_enabled {
+        return "TERMINAL SELECT · Alt+S restore TUI mouse · ^O activity";
+    }
+
+    // Idle default (mouse capture ON, exclusive TUI, drag-to-select)
+    "Enter submit · ^C cancel · ^Y yank · drag to copy · ^O activity · ? help"
 }
