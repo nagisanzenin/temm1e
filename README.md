@@ -588,6 +588,10 @@ That's it. Vigil handles everything else: log scanning, triage, credential scrub
 
 ### Tem-Code — Foundational Coding Agent Layer
 
+<p align="center">
+  <img src="assets/tem-code-overview.png" alt="Tem-Code Architecture Overview" width="100%">
+</p>
+
 Tem can now code like a senior engineer. Tem-Code is a foundational layer of specialized coding tools, self-governing safety guardrails, and a skull-aligned context engine — designed from deep industry research across 8 production coding agents (Claude Code, OpenAI Codex, Aider, SWE-agent, Cursor, Windsurf, OpenCode, Antigravity).
 
 **5 new tools, each solving a specific problem the industry identified:**
