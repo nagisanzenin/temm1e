@@ -30,11 +30,37 @@ impl EigenTuneStateMachine {
 
         match record.state {
             TierState::Collecting => self.check_collecting_transition(tier, &record).await,
-            TierState::Training => Ok(None), // Training transitions handled by trainer
+            TierState::Training => self.check_training_transition(tier, &record).await,
             TierState::Evaluating => self.check_evaluating_transition(tier, &record).await,
             TierState::Shadowing => self.check_shadowing_transition(tier, &record).await,
             TierState::Graduated => self.check_graduated_transition(tier, &record).await,
         }
+    }
+
+    /// Training transitions are normally driven by the trainer orchestrator
+    /// (`engine::trainer::TrainerOrchestrator::run`). This method is a safety
+    /// net: if a tier has been Training for more than 1 hour with no
+    /// `current_run_id`, the trainer almost certainly crashed. Recover by
+    /// reverting to Collecting so the next training cycle can start.
+    async fn check_training_transition(
+        &self,
+        _tier: EigenTier,
+        record: &crate::types::TierRecord,
+    ) -> Result<Option<TierState>, temm1e_core::types::error::Temm1eError> {
+        if record.current_run_id.is_none() {
+            if let Some(started) = record.last_trained_at {
+                let elapsed = chrono::Utc::now() - started;
+                if elapsed > chrono::Duration::hours(1) {
+                    tracing::warn!(
+                        tier = %record.tier.as_str(),
+                        elapsed_secs = elapsed.num_seconds(),
+                        "Eigen-Tune: tier stuck in Training without a run; reverting to Collecting"
+                    );
+                    return Ok(Some(TierState::Collecting));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Collecting → Training: enough data AND diverse enough.

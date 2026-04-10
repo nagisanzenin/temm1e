@@ -14,6 +14,7 @@
 pub mod backends;
 pub mod collector;
 pub mod config;
+pub mod curator;
 pub mod engine;
 pub mod judge;
 pub mod scorer;
@@ -135,6 +136,47 @@ impl EigenTuneEngine {
                 Vec::new()
             }
         }
+    }
+
+    /// Run a complete training cycle for a tier.
+    ///
+    /// Sequence: trainer (curate → backend → ollama commit → save run) →
+    /// evaluator (run holdout → write eval_accuracy/eval_n).
+    ///
+    /// On success the tier transitions through `Training → Evaluating →
+    /// Shadowing` (or back to `Collecting` if Wilson lower bound fails).
+    /// On any failure the tier reverts to `Collecting` and the error is
+    /// returned. The caller (the periodic tick task in `main.rs`) catches
+    /// the error and never lets it reach the user.
+    ///
+    /// This is the public entry point for training. It is invoked by the
+    /// tick task in `main.rs` when a tier transitions into Training state.
+    pub async fn train(
+        &self,
+        tier: EigenTier,
+    ) -> Result<(), temm1e_core::types::error::Temm1eError> {
+        let trainer =
+            engine::trainer::TrainerOrchestrator::new(self.store.clone(), self.config.clone());
+        let _artifacts = trainer.run(tier).await?;
+
+        // Trainer transitions Training → Evaluating on success.
+        // Now run the evaluator immediately so eval_accuracy/eval_n are
+        // populated for the next tick of the state machine.
+        let record = self.store.get_tier(tier.as_str()).await?;
+        let run_id = record
+            .serving_run_id
+            .clone()
+            .or(record.current_run_id.clone())
+            .ok_or_else(|| {
+                temm1e_core::types::error::Temm1eError::Internal(
+                    "Eigen-Tune: train completed without a run_id on tier record".into(),
+                )
+            })?;
+
+        let evaluator =
+            engine::evaluator::EvaluatorOrchestrator::new(self.store.clone(), self.config.clone());
+        let _report = evaluator.run(tier, &run_id).await?;
+        Ok(())
     }
 
     /// Get full status report.

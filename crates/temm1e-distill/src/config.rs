@@ -15,6 +15,16 @@ pub struct EigenTuneConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
 
+    /// Master switch for local routing. When false, the engine still collects,
+    /// trains, evaluates, and shadow-tests, but the runtime layer (Phase 13)
+    /// always returns Cloud regardless of tier state. This is the second of
+    /// the double opt-in switches required by the seven-gate safety chain
+    /// (see `tems_lab/eigen/LOCAL_ROUTING_SAFETY.md` §2). Default false so
+    /// users can observe the system work for several training cycles before
+    /// flipping the routing switch.
+    #[serde(default = "default_false")]
+    pub enable_local_routing: bool,
+
     // ── Capture thresholds ──────────────────────────────────────────
     /// Minimum training pairs before first training run (per tier).
     #[serde(default = "default_min_pairs")]
@@ -193,6 +203,12 @@ pub struct EigenTuneConfig {
     /// regardless of reservoir position.
     #[serde(default = "default_retention_days")]
     pub retention_days: i64,
+
+    /// Maximum wall-clock minutes a single training subprocess may run.
+    /// Enforced via tokio::time::timeout in the trainer orchestrator. On
+    /// timeout, the subprocess is killed and the tier reverts to Collecting.
+    #[serde(default = "default_max_training_minutes")]
+    pub max_training_minutes: u64,
 }
 
 // ── Default value functions ─────────────────────────────────────────
@@ -308,11 +324,15 @@ fn default_max_pairs_per_tier() -> i64 {
 fn default_retention_days() -> i64 {
     180
 }
+fn default_max_training_minutes() -> u64 {
+    60
+}
 
 impl Default for EigenTuneConfig {
     fn default() -> Self {
         Self {
             enabled: default_false(),
+            enable_local_routing: default_false(),
             min_pairs: default_min_pairs(),
             eval_holdout_pct: default_eval_holdout_pct(),
             quality_threshold: default_quality_threshold(),
@@ -354,6 +374,7 @@ impl Default for EigenTuneConfig {
             artifacts_dir: default_artifacts_dir(),
             max_pairs_per_tier: default_max_pairs_per_tier(),
             retention_days: default_retention_days(),
+            max_training_minutes: default_max_training_minutes(),
         }
     }
 }

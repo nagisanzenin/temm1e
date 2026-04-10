@@ -6,7 +6,7 @@
   <a href="https://github.com/nagisanzenin/temm1e/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/temm1e?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.com/invite/temm1e"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-4.8.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-4.9.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
@@ -15,7 +15,7 @@
 <h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever. <strong>Now grows itself.</strong></h3>
 
 <p align="center">
-  <code>126K lines</code> · <code>2,308 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>24 crates</code> · <code>full computer use</code> · <code>cambium self-grow</code>
+  <code>129K lines</code> · <code>2,337 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>24 crates</code> · <code>full computer use</code> · <code>cambium self-grow</code>
 </p>
 
 <p align="center"><strong>Powered by 13 layers of self-learning mechanism + 1 self-growing mechanism</strong></p>
@@ -287,9 +287,19 @@ Enabled by default in v3.0.0. Disable: `[pack] enabled = false`. Invisible for s
 
 ### Eigen-Tune — Self-Tuning Knowledge Distillation
 
-Every LLM call is a training example being thrown away. Eigen-Tune captures them, scores quality from user behavior, trains a local model, and graduates it through statistical gates — zero added LLM cost, zero user intervention beyond `/eigentune on`.
+Every LLM call is a training example being thrown away. Eigen-Tune captures them, scores quality from user behavior, trains a local model, and graduates it through statistical gates — zero added LLM cost.
 
-**Proven on Apple M2 with real fine-tuning:**
+**Wired into the runtime as of v4.9.0** ([INTEGRATION_PLAN](tems_lab/eigen/INTEGRATION_PLAN.md), [LOCAL_ROUTING_SAFETY](tems_lab/eigen/LOCAL_ROUTING_SAFETY.md)). **Double opt-in by design:**
+
+```toml
+[eigentune]
+enabled = true                # collect + train + evaluate + shadow (no user-facing change)
+# enable_local_routing = true # second opt-in: actually serve users from the distilled model
+```
+
+The first switch turns on data collection and the entire training/evaluation pipeline without ever changing what the user sees. Only after you've watched a tier reach `Graduated` state through `temm1e eigentune status` do you flip the second switch and let the local model serve you.
+
+**Proven on Apple M2 with real fine-tuning (v3.1.0 research):**
 
 | Metric | Result |
 |--------|:------:|
@@ -299,9 +309,9 @@ Every LLM call is a training example being thrown away. Eigen-Tune captures them
 | Inference | ~200 tok/sec, 0.303 GB peak |
 | Pipeline cost | **$0 added LLM cost** |
 
-7-stage pipeline: Collect → Score → Curate → Train → Evaluate → Shadow → Monitor. Statistical gates at every transition (SPRT, CUSUM, Wilson score 99% CI). Per-tier graduation: simple first, complex last. Cloud always the fallback.
+7-stage pipeline: Collect → Score → Curate → Train → Evaluate → Shadow → Monitor. **Seven-gate safety chain** protects local serving: master kill switch, tool-use guard (tool-bearing requests always go to cloud), Wilson 99% CI evaluation, SPRT shadow gate, CUSUM drift detection with auto-demotion, 30s timeout + automatic cloud fallback, manual emergency demote (`temm1e eigentune demote <tier>`). Per-tier graduation: simple first, complex last. **Cloud always the fallback.**
 
-[Research paper →](tems_lab/eigen/RESEARCH_PAPER.md) · [Design doc →](tems_lab/eigen/DESIGN.md) · [Full lab →](tems_lab/eigen/)
+[Research paper →](tems_lab/eigen/RESEARCH_PAPER.md) · [Design doc →](tems_lab/eigen/DESIGN.md) · [Setup guide →](tems_lab/eigen/SETUP.md) · [Integration plan →](tems_lab/eigen/INTEGRATION_PLAN.md) · [Safety chain →](tems_lab/eigen/LOCAL_ROUTING_SAFETY.md) · [Full lab →](tems_lab/eigen/)
 
 ### Unified Artifact Value Function — The Mathematics of Self-Learning
 
@@ -868,7 +878,7 @@ temm1e-watchdog (separate binary)
 <td align="center"><strong>15 MB</strong><br><sub>Idle RAM</sub></td>
 <td align="center"><strong>31 ms</strong><br><sub>Cold start</sub></td>
 <td align="center"><strong>9.6 MB</strong><br><sub>Binary size</sub></td>
-<td align="center"><strong>2,308</strong><br><sub>Tests</sub></td>
+<td align="center"><strong>2,337</strong><br><sub>Tests</sub></td>
 <td align="center"><strong>9</strong><br><sub>AI Providers</sub></td>
 <td align="center"><strong>15</strong><br><sub>Built-in tools</sub></td>
 <td align="center"><strong>7</strong><br><sub>Channels</sub></td>
@@ -991,7 +1001,7 @@ temm1e reset --confirm       Factory reset with backup
 
 ```bash
 cargo check --workspace                                              # Quick check
-cargo test --workspace                                               # 2,308 tests
+cargo test --workspace                                               # 2,337 tests
 cargo clippy --workspace --all-targets --all-features -- -D warnings # 0 warnings
 cargo fmt --all                                                      # Format
 cargo build --release                                                # Release binary
@@ -1039,11 +1049,13 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
                     │
 2026-03-22  v3.3.0  ●━━━ WhatsApp Web + Cloud API channels, one-line installer, setup wizard — wa-rs integration (QR scan pairing, Signal Protocol E2E, SQLite sessions), Cloud API with webhook signature validation, install.sh (curl|sh, multi-platform binaries), `temm1e setup` interactive wizard, multi-platform release CI (x86_64+aarch64, Linux+macOS), fix #21 OpenAI empty name field. 1832 tests
                     │
+2026-04-10  v4.9.0  ●━━━ Eigen-Tune wired into runtime — closes issue #35 ("feature advertised as functional but pipeline incomplete"). Folds curator + mlx/unsloth backends + trainer + evaluator into temm1e-distill. Wires the engine into runtime.rs (5 fire-and-forget hooks: collection, signal-tool, signal-user, complexity capture, full routing wrapper) and main.rs (engine construction + 60s tick task + CLI subcommand + slash command). Double opt-in (`enabled` AND `enable_local_routing`). Seven-gate safety chain (master kill switch + tool-use guard + Wilson 99% CI + SPRT + CUSUM drift detection + 30s timeout/cloud fallback + manual demote). Llama/Mistral/Gemma family base models via Ollama ADAPTER directive. 30+ new unit tests, 2337 workspace tests passing. Default-config users: zero behavior change.
+                    │
 2026-03-22  v3.2.1  ●━━━ Discord integration + channel-agnostic startup — Discord channel wired into message pipeline (was implemented but never connected), per-message channel map routing (Telegram-only/Discord-only/both simultaneously), DISCORD_BOT_TOKEN env auto-inject, wildcard allowlist ("*"), Discord reply threading via MessageReference, /timelimit command for runtime hive task timeout, hive default bumped to 30min, Docker rebuilt with all features (TUI + Discord + health check + tini). 1825 tests
                     │
 2026-03-21  v3.2.0  ●━━━ Tem Prowl — web-native browsing with OTK authentication. Cloned profile architecture (inherit user's Chrome sessions), /login command (100+ services), /browser lifecycle management, QR auto-detection, layered observation (32% token savings), credential isolation (zeroize + vault), headed/headless fallback. Live validated: Facebook post + Zalo message from Telegram. 1808 tests
                     │
-2026-03-18  v3.1.0  ●━━━ Eigen-Tune — self-tuning knowledge distillation engine (temm1e-distill), 7-stage pipeline with SPRT/CUSUM/Wilson statistical gates, zero-cost evaluation, proven on M2 with real LoRA fine-tune, 119 new tests, 1638 total. Research: real fine-tuning proof-of-concept on SmolLM2-135M
+2026-03-18  v3.1.0  ●━━━ Eigen-Tune research foundation — statistical machinery for temm1e-distill (SPRT/CUSUM/Wilson gates), SQLite store, state machine, 119 new tests. Research: real fine-tuning proof-of-concept on SmolLM2-135M (manual M2 run; runtime integration was deferred to v4.9.0). 1638 total tests.
                     │
 2026-03-18  v3.0.0  ●━━━ Many Tems — stigmergic swarm intelligence runtime (temm1e-hive), Alpha coordinator + worker Tems, task DAG decomposition, scent-field coordination, 4.54x speedup on parallel tasks, zero coordination tokens. Research: quadratic→linear context cost
                     │

@@ -68,7 +68,7 @@ crates/
   temm1e-vault       -- Secret storage with ChaCha20-Poly1305 encryption
   temm1e-skills      -- Skill registry and execution
   temm1e-hive        -- Many Tems: swarm intelligence, pack coordination, scent field
-  temm1e-distill     -- Eigen-Tune: self-tuning distillation engine
+  temm1e-distill     -- Eigen-Tune: self-tuning distillation engine (runtime-gated by [eigentune] enabled=true; local serving requires the second opt-in enable_local_routing=true; see tems_lab/eigen/LOCAL_ROUTING_SAFETY.md for the seven-gate safety chain)
   temm1e-gaze        -- Tem Gaze: desktop vision control (xcap + enigo), SoM overlay
   temm1e-perpetuum   -- Perpetuum: perpetual time-aware entity, scheduling, monitors, volition
   temm1e-anima       -- Tem Anima: emotional intelligence, user profiling, personality system

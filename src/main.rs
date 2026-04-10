@@ -127,6 +127,25 @@ enum Commands {
     Tui,
     /// Interactive setup wizard — guides you through first-time configuration
     Setup,
+    /// Manage Eigen-Tune (self-tuning knowledge distillation)
+    Eigentune {
+        #[command(subcommand)]
+        command: EigentuneCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum EigentuneCommands {
+    /// Show training status, prerequisites, and tier metrics
+    Status,
+    /// Print setup instructions for the local training stack
+    Setup,
+    /// Show or set the base model for fine-tuning
+    Model { name: Option<String> },
+    /// Manually trigger a state machine tick (advances tier transitions)
+    Tick,
+    /// Force-demote a graduated tier back to Collecting (Gate 7 emergency kill switch)
+    Demote { tier: String },
 }
 
 #[cfg(feature = "codex-oauth")]
@@ -2056,6 +2075,64 @@ async fn main() -> Result<()> {
             let agent_state: Arc<tokio::sync::RwLock<Option<Arc<temm1e_agent::AgentRuntime>>>> =
                 Arc::new(tokio::sync::RwLock::new(None));
 
+            // ── Eigen-Tune: load [eigentune] config + instantiate engine ──
+            // Hoisted to outer scope so both the agent construction (inside
+            // the credentials block below) and the periodic tick task
+            // (after the credentials block) can see them.
+            //
+            // Plan §A1: avoid the temm1e-core ↔ temm1e-distill circular dep
+            // by parsing the same TOML twice. Temm1eConfig already silently
+            // ignores unknown sections; here we pull only [eigentune].
+            let eigentune_cfg: temm1e_distill::config::EigenTuneConfig = {
+                #[derive(serde::Deserialize, Default)]
+                struct EigenRoot {
+                    #[serde(default)]
+                    eigentune: temm1e_distill::config::EigenTuneConfig,
+                }
+                let raw_path = config_path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        dirs::home_dir()
+                            .map(|h| h.join(".temm1e/config.toml"))
+                            .unwrap_or_else(|| std::path::PathBuf::from("temm1e.toml"))
+                    });
+                let raw = std::fs::read_to_string(&raw_path).unwrap_or_default();
+                let expanded = temm1e_core::config::expand_env_vars(&raw);
+                toml::from_str::<EigenRoot>(&expanded)
+                    .map(|r| r.eigentune)
+                    .unwrap_or_default()
+            };
+
+            let eigen_tune_engine: Option<Arc<temm1e_distill::EigenTuneEngine>> =
+                if eigentune_cfg.enabled {
+                    let db_path = dirs::home_dir()
+                        .map(|h| h.join(".temm1e").join("eigentune.db"))
+                        .unwrap_or_else(|| std::path::PathBuf::from("eigentune.db"));
+                    if let Some(parent) = db_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+                    match temm1e_distill::EigenTuneEngine::new(&eigentune_cfg, &db_url).await {
+                        Ok(engine) => {
+                            tracing::info!(
+                                db = %db_path.display(),
+                                enable_local_routing = eigentune_cfg.enable_local_routing,
+                                "Eigen-Tune: engine initialized"
+                            );
+                            Some(Arc::new(engine))
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "Eigen-Tune: failed to initialize, continuing without"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
             if let Some((ref pname, ref key, ref model)) = credentials {
                 // Filter out placeholder/invalid keys at startup
                 if is_placeholder_key(key) {
@@ -2167,6 +2244,12 @@ async fn main() -> Result<()> {
                     }
                     // Wire Perpetuum temporal context into agent
                     runtime = runtime.with_perpetuum_temporal(perpetuum_temporal.clone());
+
+                    // Wire Eigen-Tune engine into agent (Phase 9)
+                    if let Some(et) = eigen_tune_engine.clone() {
+                        runtime = runtime.with_eigen_tune(et, eigentune_cfg.enable_local_routing);
+                    }
+
                     let agent = Arc::new(runtime);
                     *agent_state.write().await = Some(agent);
                     tracing::info!(provider = %pname, model = %model, "Agent initialized");
@@ -2355,6 +2438,49 @@ async fn main() -> Result<()> {
                     checklist = %config.heartbeat.checklist,
                     "Heartbeat runner started"
                 );
+            }
+
+            // ── Eigen-Tune periodic state-machine tick (Phase 8) ──
+            // Runs every 60s to advance tier transitions. When a tier
+            // enters Training, the trainer is spawned as a child task so
+            // the tick loop is not blocked by a multi-minute training run.
+            if let Some(et_engine) = eigen_tune_engine.clone() {
+                task_handles.push(tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(60));
+                    interval.set_missed_tick_behavior(
+                        tokio::time::MissedTickBehavior::Skip,
+                    );
+                    loop {
+                        interval.tick().await;
+                        let transitions: Vec<(
+                            temm1e_distill::types::EigenTier,
+                            temm1e_distill::types::TierState,
+                            temm1e_distill::types::TierState,
+                        )> = et_engine.tick().await;
+                        for (tier, from, to) in transitions {
+                            tracing::info!(
+                                tier = %tier.as_str(),
+                                from = %from.as_str(),
+                                to = %to.as_str(),
+                                "Eigen-Tune: tier transition"
+                            );
+                            if to == temm1e_distill::types::TierState::Training {
+                                let engine = et_engine.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = engine.train(tier).await {
+                                        tracing::warn!(
+                                            error = %e,
+                                            tier = %tier.as_str(),
+                                            "Eigen-Tune: training cycle failed (tier reverts to Collecting)"
+                                        );
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }));
+                tracing::info!("Eigen-Tune: periodic tick task spawned (60s interval)");
             }
 
             // ── Hive pack initialization (if enabled) ────────
@@ -2973,6 +3099,24 @@ async fn main() -> Result<()> {
                                         return;
                                     }
 
+                                    // /eigentune — Eigen-Tune slash dispatch
+                                    if cmd_lower.starts_with("/eigentune") {
+                                        let arg = msg_text_cmd.trim()
+                                            ["/eigentune".len()..]
+                                            .trim()
+                                            .to_string();
+                                        let reply_text = handle_eigentune_slash(&arg).await;
+                                        let reply = temm1e_core::types::message::OutboundMessage {
+                                            chat_id: msg.chat_id.clone(),
+                                            text: reply_text,
+                                            reply_to: Some(msg.id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        send_with_retry(&*sender, reply).await;
+                                        is_heartbeat_clone.store(false, Ordering::Relaxed);
+                                        return;
+                                    }
+
                                     // /addkey — secure OTK flow
                                     if cmd_lower == "/addkey" {
                                         let otk = setup_tokens_worker.generate(&msg.chat_id).await;
@@ -3376,6 +3520,11 @@ Available commands:\n\n\
 /cambium — Cambium status (gap-driven self-grow)\n\
 /cambium on — Enable cambium growth\n\
 /cambium off — Disable cambium growth\n\
+/eigentune — Eigen-Tune status (self-tuning distillation)\n\
+/eigentune setup — Show prerequisites + setup guide\n\
+/eigentune model — Show base model + recommendations\n\
+/eigentune tick — Manually advance state machine\n\
+/eigentune demote <tier> — Force-revert a graduated tier (kill switch)\n\
 /mcp — List connected MCP servers and tools\n\
 /mcp add <name> <command-or-url> — Connect a new MCP server\n\
 /mcp remove <name> — Disconnect an MCP server\n\
@@ -5690,6 +5839,29 @@ Just type a message to chat with the AI agent.",
                                 tracing::info!("TemDOS invoke_core tool registered (CLI)");
                             }
 
+                            // ── Eigen-Tune: load + instantiate engine for CLI chat ──
+                            let cli_eigentune_cfg = load_eigentune_config_from_path(config_path);
+                            let cli_eigen_tune_engine: Option<
+                                Arc<temm1e_distill::EigenTuneEngine>,
+                            > = if cli_eigentune_cfg.enabled {
+                                match open_eigentune_engine(&cli_eigentune_cfg).await {
+                                    Ok(engine) => {
+                                        tracing::info!(
+                                            enable_local_routing =
+                                                cli_eigentune_cfg.enable_local_routing,
+                                            "Eigen-Tune: engine initialized (CLI chat)"
+                                        );
+                                        Some(Arc::new(engine))
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "Eigen-Tune: failed to initialize (CLI chat), continuing without");
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
                             let system_prompt = Some(build_system_prompt(&personality));
                             let consciousness_provider = provider.clone();
                             let mut rt = temm1e_agent::AgentRuntime::with_limits(
@@ -5714,6 +5886,9 @@ Just type a message to chat with the AI agent.",
                                 social_storage.clone(),
                                 Some(social_config_captured.clone()),
                             );
+                            if let Some(et) = cli_eigen_tune_engine.clone() {
+                                rt = rt.with_eigen_tune(et, cli_eigentune_cfg.enable_local_routing);
+                            }
                             // Tem Conscious: enable consciousness for CLI chat
                             tracing::info!(
                                 consciousness_enabled = config.consciousness.enabled,
@@ -5842,6 +6017,13 @@ Just type a message to chat with the AI agent.",
                                                 ),
                                             );
                                         }
+                                        // Re-inject eigen-tune into the rebuilt runtime
+                                        if let Some(et) = cli_eigen_tune_engine.clone() {
+                                            rt2 = rt2.with_eigen_tune(
+                                                et,
+                                                cli_eigentune_cfg.enable_local_routing,
+                                            );
+                                        }
                                         rt = rt2;
                                         p.start();
                                         tracing::info!("Perpetuum runtime started (CLI chat)");
@@ -5957,6 +6139,15 @@ Just type a message to chat with the AI agent.",
                 let cmd_lower = msg_text.trim().to_lowercase();
 
                 // ── Command interception (same as gateway) ─────
+                // /eigentune — Eigen-Tune slash dispatch
+                if cmd_lower.starts_with("/eigentune") {
+                    let arg = msg_text.trim()["/eigentune".len()..].trim().to_string();
+                    let reply_text = handle_eigentune_slash(&arg).await;
+                    println!("\n{}\n", reply_text);
+                    eprint!("temm1e> ");
+                    continue;
+                }
+
                 // /addkey — secure OTK flow
                 if cmd_lower == "/addkey" {
                     let otk = setup_tokens.generate(&msg.chat_id).await;
@@ -6048,6 +6239,11 @@ Just type a message to chat with the AI agent.",
                          /cambium — Cambium status (gap-driven self-grow)\n\
                          /cambium on — Enable cambium growth\n\
                          /cambium off — Disable cambium growth\n\
+                         /eigentune — Eigen-Tune status (self-tuning distillation)\n\
+                         /eigentune setup — Show prerequisites + setup guide\n\
+                         /eigentune model — Show base model + recommendations\n\
+                         /eigentune tick — Manually advance state machine\n\
+                         /eigentune demote <tier> — Force-revert a graduated tier (kill switch)\n\
                          /mcp — List connected MCP servers and tools\n\
                          /mcp add <name> <command-or-url> — Connect a new MCP server\n\
                          /mcp remove <name> — Disconnect an MCP server\n\
@@ -7336,6 +7532,303 @@ Just type a message to chat with the AI agent.",
         }
         Commands::Setup => {
             run_setup_wizard().await?;
+        }
+        Commands::Eigentune { command } => {
+            handle_eigentune_command(config_path, command).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Load the [eigentune] section from a TOML config path (two-pass parse).
+/// Returns Default::default() on any error.
+fn load_eigentune_config_from_path(
+    config_path: Option<&std::path::Path>,
+) -> temm1e_distill::config::EigenTuneConfig {
+    #[derive(serde::Deserialize, Default)]
+    struct EigenRoot {
+        #[serde(default)]
+        eigentune: temm1e_distill::config::EigenTuneConfig,
+    }
+    let raw_path: std::path::PathBuf = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join(".temm1e/config.toml"))
+            .unwrap_or_else(|| std::path::PathBuf::from("temm1e.toml"))
+    });
+    let raw = std::fs::read_to_string(&raw_path).unwrap_or_default();
+    let expanded = temm1e_core::config::expand_env_vars(&raw);
+    toml::from_str::<EigenRoot>(&expanded)
+        .map(|r| r.eigentune)
+        .unwrap_or_default()
+}
+
+/// Open the Eigen-Tune SQLite store at the standard path.
+async fn open_eigentune_engine(
+    cfg: &temm1e_distill::config::EigenTuneConfig,
+) -> anyhow::Result<temm1e_distill::EigenTuneEngine> {
+    let db_path = dirs::home_dir()
+        .map(|h| h.join(".temm1e").join("eigentune.db"))
+        .unwrap_or_else(|| std::path::PathBuf::from("eigentune.db"));
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let engine = temm1e_distill::EigenTuneEngine::new(cfg, &db_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("eigentune store: {e}"))?;
+    Ok(engine)
+}
+
+/// Handle a `/eigentune ...` slash command from chat (gateway or CLI).
+///
+/// Opens its own EigenTune store on demand. Returns the reply text.
+/// Slash commands are user-initiated and infrequent, so the per-call
+/// SQLite connection setup cost (~50ms) is acceptable.
+async fn handle_eigentune_slash(arg: &str) -> String {
+    // Find the config path the same way the daemon does
+    let config_path: std::path::PathBuf = dirs::home_dir()
+        .map(|h| h.join(".temm1e/config.toml"))
+        .unwrap_or_else(|| std::path::PathBuf::from("temm1e.toml"));
+    let cfg = load_eigentune_config_from_path(Some(&config_path));
+
+    if !cfg.enabled {
+        return "Eigen-Tune is not enabled. To activate:\n  1. Edit temm1e.toml\n  2. Add [eigentune]\\nenabled = true\n  3. Restart the daemon".to_string();
+    }
+
+    let engine = match open_eigentune_engine(&cfg).await {
+        Ok(e) => e,
+        Err(e) => return format!("Eigen-Tune: failed to open store: {e}"),
+    };
+
+    let parts: Vec<&str> = arg.split_whitespace().collect();
+    match parts.as_slice() {
+        [] | ["status"] => {
+            let mut out = engine.format_status().await;
+            out.push_str("\n\nMaster switches:\n");
+            out.push_str(&format!("  enabled              = {}\n", cfg.enabled));
+            out.push_str(&format!(
+                "  enable_local_routing = {}\n",
+                cfg.enable_local_routing
+            ));
+            out
+        }
+        ["setup"] => {
+            let prereqs = engine.check_prerequisites().await;
+            let mut out = String::from("EIGEN-TUNE SETUP\n\n");
+            out.push_str(&format!(
+                "Ollama: {}\n",
+                if prereqs.ollama_running {
+                    "running ✓"
+                } else {
+                    "not running"
+                }
+            ));
+            out.push_str(&format!(
+                "Python: {}\n",
+                prereqs.python_version.as_deref().unwrap_or("not found")
+            ));
+            out.push_str(&format!(
+                "Can collect: {}\nCan train:   {}\nCan serve:   {}\n",
+                prereqs.can_collect, prereqs.can_train, prereqs.can_serve
+            ));
+            out
+        }
+        ["model"] => engine.format_model_status().await,
+        ["model", name] => format!(
+            "To change the base model, edit [eigentune] base_model = \"{name}\" in temm1e.toml and restart."
+        ),
+        ["tick"] => {
+            let transitions: Vec<(
+                temm1e_distill::types::EigenTier,
+                temm1e_distill::types::TierState,
+                temm1e_distill::types::TierState,
+            )> = engine.tick().await;
+            if transitions.is_empty() {
+                "Eigen-Tune: no tier transitions".to_string()
+            } else {
+                let mut out = String::new();
+                for (tier, from, to) in transitions {
+                    out.push_str(&format!(
+                        "Eigen-Tune: {} {} → {}\n",
+                        tier.as_str(),
+                        from.as_str(),
+                        to.as_str()
+                    ));
+                }
+                out
+            }
+        }
+        ["demote", tier] => {
+            let tier_lower = tier.to_lowercase();
+            if !["simple", "standard", "complex"].contains(&tier_lower.as_str()) {
+                return format!(
+                    "Eigen-Tune: invalid tier '{tier}'. Must be one of: simple, standard, complex"
+                );
+            }
+            let db_path = dirs::home_dir()
+                .map(|h| h.join(".temm1e").join("eigentune.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("eigentune.db"));
+            let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+            let store = match temm1e_distill::store::EigenTuneStore::new(&db_url).await {
+                Ok(s) => std::sync::Arc::new(s),
+                Err(e) => return format!("Eigen-Tune: store error: {e}"),
+            };
+            let mut record = match store.get_tier(&tier_lower).await {
+                Ok(r) => r,
+                Err(e) => return format!("Eigen-Tune: get_tier error: {e}"),
+            };
+            let from = record.state;
+            record.state = temm1e_distill::types::TierState::Collecting;
+            record.last_demoted_at = Some(chrono::Utc::now());
+            record.serving_run_id = None;
+            record.serving_since = None;
+            record.sprt_lambda = 0.0;
+            record.sprt_n = 0;
+            record.cusum_s = 0.0;
+            record.cusum_n = 0;
+            if let Err(e) = store.update_tier(&record).await {
+                return format!("Eigen-Tune: update_tier error: {e}");
+            }
+            format!(
+                "Eigen-Tune: tier {tier_lower} demoted (was: {} → now: collecting)",
+                from.as_str()
+            )
+        }
+        _ => "Eigen-Tune: usage:\n  /eigentune status\n  /eigentune setup\n  /eigentune model [name]\n  /eigentune tick\n  /eigentune demote <tier>".to_string(),
+    }
+}
+
+/// Handle a `temm1e eigentune <subcommand>` invocation.
+async fn handle_eigentune_command(
+    config_path: Option<&std::path::Path>,
+    command: EigentuneCommands,
+) -> anyhow::Result<()> {
+    let cfg = load_eigentune_config_from_path(config_path);
+    let engine = match open_eigentune_engine(&cfg).await {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Eigen-Tune: failed to open store: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match command {
+        EigentuneCommands::Status => {
+            println!("{}", engine.format_status().await);
+            // Show both opt-in switches explicitly so the user can audit
+            // exactly what's enabled.
+            println!();
+            println!("Master switches:");
+            println!("  enabled              = {}", cfg.enabled);
+            println!("  enable_local_routing = {}", cfg.enable_local_routing);
+        }
+        EigentuneCommands::Setup => {
+            let prereqs = engine.check_prerequisites().await;
+            println!("EIGEN-TUNE SETUP\n");
+            println!(
+                "Ollama: {}",
+                if prereqs.ollama_running {
+                    "running ✓"
+                } else {
+                    "not running — brew install ollama && ollama serve"
+                }
+            );
+            println!(
+                "Python: {}",
+                prereqs.python_version.as_deref().unwrap_or("not found")
+            );
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                println!(
+                    "MLX: {}",
+                    if prereqs.mlx_installed {
+                        "installed ✓"
+                    } else {
+                        "not found — pip install mlx-lm"
+                    }
+                );
+            } else {
+                println!(
+                    "Unsloth: {}",
+                    if prereqs.unsloth_installed {
+                        "installed ✓"
+                    } else {
+                        "not found — pip install unsloth"
+                    }
+                );
+            }
+            println!("Can collect: {}", prereqs.can_collect);
+            println!("Can train:   {}", prereqs.can_train);
+            println!("Can serve:   {}", prereqs.can_serve);
+            println!();
+            println!("To enable Eigen-Tune, set in temm1e.toml:");
+            println!("  [eigentune]");
+            println!("  enabled = true");
+            println!("  # enable_local_routing = true   # second opt-in for serving from local");
+        }
+        EigentuneCommands::Model { name } => {
+            if let Some(name) = name {
+                println!(
+                    "Eigen-Tune: to change the base model, edit [eigentune] base_model = \"{name}\" in temm1e.toml and restart."
+                );
+            } else {
+                println!("{}", engine.format_model_status().await);
+            }
+        }
+        EigentuneCommands::Tick => {
+            let transitions: Vec<(
+                temm1e_distill::types::EigenTier,
+                temm1e_distill::types::TierState,
+                temm1e_distill::types::TierState,
+            )> = engine.tick().await;
+            if transitions.is_empty() {
+                println!("Eigen-Tune: no tier transitions");
+            } else {
+                for (tier, from, to) in transitions {
+                    println!(
+                        "Eigen-Tune: {} {} → {}",
+                        tier.as_str(),
+                        from.as_str(),
+                        to.as_str()
+                    );
+                }
+            }
+        }
+        EigentuneCommands::Demote { tier } => {
+            // Gate 7 emergency kill switch — directly transition the tier
+            // back to Collecting via raw store update.
+            let tier_lower = tier.to_lowercase();
+            if !["simple", "standard", "complex"].contains(&tier_lower.as_str()) {
+                eprintln!(
+                    "Eigen-Tune: invalid tier '{tier}'. Must be one of: simple, standard, complex"
+                );
+                std::process::exit(2);
+            }
+            // We don't have direct store access from EigenTuneEngine in the
+            // public API, so we use the engine's tick to query state and
+            // call the graduation manager via store.
+            // For now, we open a fresh store connection and demote directly.
+            let db_path = dirs::home_dir()
+                .map(|h| h.join(".temm1e").join("eigentune.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("eigentune.db"));
+            let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+            let store =
+                std::sync::Arc::new(temm1e_distill::store::EigenTuneStore::new(&db_url).await?);
+            let mut record = store.get_tier(&tier_lower).await?;
+            let from = record.state;
+            record.state = temm1e_distill::types::TierState::Collecting;
+            record.last_demoted_at = Some(chrono::Utc::now());
+            record.serving_run_id = None;
+            record.serving_since = None;
+            record.sprt_lambda = 0.0;
+            record.sprt_n = 0;
+            record.cusum_s = 0.0;
+            record.cusum_n = 0;
+            store.update_tier(&record).await?;
+            println!(
+                "Eigen-Tune: tier {tier_lower} demoted (was: {} → now: collecting)",
+                from.as_str()
+            );
         }
     }
 

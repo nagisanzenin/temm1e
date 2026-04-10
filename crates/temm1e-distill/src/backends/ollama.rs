@@ -136,6 +136,51 @@ struct OllamaEmbedResponse {
     embeddings: Vec<Vec<f64>>,
 }
 
+/// Send a single user message to a local Ollama model and return its reply text.
+///
+/// Used by the evaluator (`engine::evaluator`) to compare a freshly-trained
+/// distilled model's responses against the cloud-stored holdout pairs.
+/// Non-streaming. 60s timeout.
+pub async fn chat(
+    model: &str,
+    user_message: &str,
+) -> Result<String, temm1e_core::types::error::Temm1eError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| temm1e_core::types::error::Temm1eError::Tool(format!("HTTP client: {}", e)))?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": user_message}],
+        "stream": false,
+    });
+
+    let resp = client
+        .post(format!("{}/api/chat", OLLAMA_BASE))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| temm1e_core::types::error::Temm1eError::Tool(format!("Ollama chat: {}", e)))?;
+
+    if !resp.status().is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(temm1e_core::types::error::Temm1eError::Tool(format!(
+            "Ollama chat error: {}",
+            err
+        )));
+    }
+
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| {
+        temm1e_core::types::error::Temm1eError::Tool(format!("Parse chat response: {}", e))
+    })?;
+
+    Ok(parsed["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
+}
+
 /// Generate embedding for text using local Ollama embedding model.
 pub async fn embed(
     text: &str,

@@ -36,6 +36,22 @@ fn truncate_json_preview(value: &serde_json::Value, max_chars: usize) -> String 
     out
 }
 
+/// Concatenate all `Text` parts of a `CompletionResponse`'s content into
+/// a single string. Used by the Eigen-Tune routing wrapper to compare
+/// local and cloud responses for shadow/monitor mode.
+fn response_to_text(resp: &temm1e_core::types::message::CompletionResponse) -> String {
+    let mut out = String::new();
+    for part in &resp.content {
+        if let temm1e_core::types::message::ContentPart::Text { text } = part {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    out
+}
+
 /// Extract the first non-empty line of `text`, trimmed and truncated
 /// to `max_chars` (UTF-8 safe). Used by v4.8.0 observability enrichment.
 fn first_nonempty_line_preview(text: &str, max_chars: usize) -> String {
@@ -74,6 +90,9 @@ use crate::task_queue::TaskQueue;
 // Social intelligence
 use temm1e_anima::personality::PersonalityConfig;
 use temm1e_anima::SocialStorage;
+
+// Eigen-Tune self-tuning distillation engine
+use temm1e_distill::EigenTuneEngine;
 
 /// Shared runtime mode handle (same type used by mode_switch tool).
 pub type SharedMode = Arc<RwLock<Temm1eMode>>;
@@ -144,6 +163,15 @@ pub struct AgentRuntime {
     social_turn_count: Arc<AtomicU32>,
     /// Social intelligence: concurrent evaluation guard to prevent overlapping evals.
     social_evaluating: Arc<AtomicBool>,
+    /// Eigen-Tune self-tuning distillation engine. None = disabled (default).
+    /// All hooks are fire-and-forget — never blocks the user reply path.
+    /// Default-config users (engine=None) see zero new code paths exercised.
+    eigen_tune: Option<Arc<EigenTuneEngine>>,
+    /// Whether local routing of distilled models is enabled. The double opt-in
+    /// gate: even if `eigen_tune.is_some()`, local routing only fires when this
+    /// is also true. Mirrors `EigenTuneConfig::enable_local_routing` so the
+    /// runtime doesn't need to read config on every request.
+    eigen_tune_local_routing: bool,
 }
 
 impl AgentRuntime {
@@ -184,6 +212,8 @@ impl AgentRuntime {
             social_config: None,
             social_turn_count: Arc::new(AtomicU32::new(0)),
             social_evaluating: Arc::new(AtomicBool::new(false)),
+            eigen_tune: None,
+            eigen_tune_local_routing: false,
         }
     }
 
@@ -258,6 +288,8 @@ impl AgentRuntime {
             social_config: None,
             social_turn_count: Arc::new(AtomicU32::new(0)),
             social_evaluating: Arc::new(AtomicBool::new(false)),
+            eigen_tune: None,
+            eigen_tune_local_routing: false,
         }
     }
 
@@ -299,6 +331,26 @@ impl AgentRuntime {
         engine: crate::consciousness_engine::ConsciousnessEngine,
     ) -> Self {
         self.consciousness = Some(engine);
+        self
+    }
+
+    /// Inject the Eigen-Tune self-tuning distillation engine.
+    ///
+    /// When set, all five hooks fire after each provider call and tool
+    /// execution. Fire-and-forget — errors are logged but never propagated
+    /// to the user. Default-config users (engine=None) see zero new code
+    /// paths exercised.
+    ///
+    /// `enable_local_routing` controls the second of the double opt-in
+    /// switches: even if the engine is set, local routing only fires when
+    /// this is also `true`. See `LOCAL_ROUTING_SAFETY.md` §2.
+    pub fn with_eigen_tune(
+        mut self,
+        engine: Arc<EigenTuneEngine>,
+        enable_local_routing: bool,
+    ) -> Self {
+        self.eigen_tune = Some(engine);
+        self.eigen_tune_local_routing = enable_local_routing;
         self
     }
 
@@ -414,6 +466,12 @@ impl AgentRuntime {
         // Tem Conscious: observation accumulators (collected during the turn)
         let mut classification_label = String::new();
         let mut difficulty_label = String::new();
+        // Eigen-Tune complexity tier (set by classifier below).
+        // String form of EigenTier: "simple"|"standard"|"complex". Defaults to
+        // "standard" if neither classification path runs (e.g., when
+        // v2_optimizations is disabled). Used by the routing wrapper at the
+        // provider call site (Phase 13) and the collection hook (Phase 11).
+        let mut eigentune_complexity: String = "standard".to_string();
         let mut tools_called_this_turn: Vec<String> = Vec::new();
         let mut tool_results_this_turn: Vec<String> = Vec::new();
         let mut max_consecutive_failures_seen: u32 = 0;
@@ -529,6 +587,48 @@ impl AgentRuntime {
                 "Images stripped — model does not support vision"
             );
             user_text = format!("{}\n\n{}", notice, user_text);
+        }
+
+        // ── Eigen-Tune: user-message signal (Phase 14, fire-and-forget) ──
+        // Detect if the new message is a retry or rejection of the previous
+        // assistant turn. Tier 1 heuristics only (no embedding) — Tier 2
+        // would require an Ollama embedding call per message which is too
+        // expensive for the hot path.
+        if let Some(et) = &self.eigen_tune {
+            let prev_user: Option<String> = session
+                .history
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::User))
+                .and_then(|m| match &m.content {
+                    MessageContent::Text(t) => Some(t.clone()),
+                    MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                        ContentPart::Text { text } => Some(text.clone()),
+                        _ => None,
+                    }),
+                });
+            // Time window: hardcoded 0 since Session may not track per-message
+            // timestamps. Passing 0 makes retry detection always-on for the
+            // edit-distance check (the 60s window is the disqualifier).
+            let elapsed_secs: u64 = 0;
+            let (agree, signal_kind) = temm1e_distill::judge::behavior::behavior_observation(
+                &user_text,
+                prev_user.as_deref(),
+                elapsed_secs,
+                false, // tool_failed: not relevant for an incoming message
+            );
+            if !agree {
+                let signal = match signal_kind {
+                    "explicit_rejection" => temm1e_distill::types::QualitySignal::UserRejected,
+                    "retry_rephrase" => temm1e_distill::types::QualitySignal::UserRetried,
+                    _ => temm1e_distill::types::QualitySignal::UserRetried,
+                };
+                let engine = et.clone();
+                let chat_id = msg.chat_id.clone();
+                tokio::spawn(async move {
+                    engine.on_signal(&chat_id, signal).await;
+                });
+            }
         }
 
         // Append the user message to session history FIRST (before classification,
@@ -760,6 +860,43 @@ impl AgentRuntime {
                                 }
                             }
 
+                            // ── Eigen-Tune: collection hook for Chat early-return ──
+                            // The Chat path bypasses the main provider call so the
+                            // standard collection hook never fires. Capture the
+                            // (user msg, classifier reply) pair here so the bulk of
+                            // conversational traffic actually contributes to training.
+                            if let Some(et) = &self.eigen_tune {
+                                eigentune_complexity = match classification.difficulty {
+                                    crate::llm_classifier::TaskDifficulty::Simple => "simple",
+                                    crate::llm_classifier::TaskDifficulty::Standard => "standard",
+                                    crate::llm_classifier::TaskDifficulty::Complex => "complex",
+                                }
+                                .to_string();
+                                let engine = et.clone();
+                                let pair_data = temm1e_distill::collector::EigenTunePairData {
+                                    messages_json: serde_json::to_string(&session.history)
+                                        .unwrap_or_default(),
+                                    system_prompt: self.system_prompt.clone(),
+                                    tools_json: None,
+                                    response_json: serde_json::json!({
+                                        "role": "assistant",
+                                        "content": classification.chat_text.clone()
+                                    })
+                                    .to_string(),
+                                    model: self.model.clone(),
+                                    provider: self.provider.name().to_string(),
+                                    complexity: eigentune_complexity.clone(),
+                                    conversation_id: msg.chat_id.clone(),
+                                    turn: session.history.len() as i32,
+                                    tokens_in: Some(classify_usage.input_tokens),
+                                    tokens_out: Some(classify_usage.output_tokens),
+                                    cost_usd: Some(classify_cost),
+                                };
+                                tokio::spawn(async move {
+                                    engine.on_completion(pair_data).await;
+                                });
+                            }
+
                             return Ok((
                                 OutboundMessage {
                                     chat_id: msg.chat_id.clone(),
@@ -836,6 +973,13 @@ impl AgentRuntime {
                                     warn!(error = %e, "Failed to send early reply for order");
                                 }
                             }
+                            // Capture complexity for Eigen-Tune routing (Phase 11)
+                            eigentune_complexity = match classification.difficulty {
+                                crate::llm_classifier::TaskDifficulty::Simple => "simple",
+                                crate::llm_classifier::TaskDifficulty::Standard => "standard",
+                                crate::llm_classifier::TaskDifficulty::Complex => "complex",
+                            }
+                            .to_string();
                             Some(classification.difficulty.execution_profile())
                         }
                     }
@@ -855,6 +999,15 @@ impl AgentRuntime {
                         );
                         return Err(Temm1eError::HiveRoute(msg.text.clone().unwrap_or_default()));
                     }
+
+                    // Capture complexity for Eigen-Tune routing (Phase 11)
+                    eigentune_complexity = match complexity {
+                        crate::model_router::TaskComplexity::Trivial
+                        | crate::model_router::TaskComplexity::Simple => "simple",
+                        crate::model_router::TaskComplexity::Standard => "standard",
+                        crate::model_router::TaskComplexity::Complex => "complex",
+                    }
+                    .to_string();
 
                     let profile = complexity.execution_profile();
                     info!(
@@ -1188,50 +1341,253 @@ impl AgentRuntime {
             // Track whether the original request had tools (for fallback detection)
             let request_had_tools = !self.tools.is_empty();
 
-            let response = match self.provider.complete(request).await {
-                Ok(resp) => {
-                    self.circuit_breaker.record_success();
-                    resp
+            // ── Eigen-Tune routing decision (Phase 13) ───────────────
+            // Triple gate before local routing fires:
+            //   1. Engine must be set (Some(et))
+            //   2. enable_local_routing must be true (double opt-in)
+            //   3. request.tools must be empty (Gate 2 — small models lack function calling)
+            // Default-config users (eigen_tune=None) skip this entirely and
+            // hit the unchanged Cloud branch below.
+            let eigentune_route = if let Some(ref et) = self.eigen_tune {
+                if self.eigen_tune_local_routing && request.tools.is_empty() {
+                    et.route(&eigentune_complexity).await
+                } else {
+                    temm1e_distill::types::RouteDecision::Cloud
                 }
-                Err(e) => {
-                    // ── Prompted Tool Calling Fallback ─────────────────────
-                    // If the provider returned an error and the request had
-                    // tools, this might be a model that doesn't support native
-                    // function calling.  Switch to prompted mode and retry.
-                    if request_had_tools && !prompted_mode {
-                        let err_str = format!("{e}");
-                        // Heuristic: 400-class errors with tool-bearing requests
-                        // MAY indicate tool-unsupported.  We check for tool-related
-                        // keywords and exclude known non-tool errors (max_tokens,
-                        // temperature, model).
-                        let is_tool_candidate = matches!(&e,
-                            Temm1eError::Provider(msg) if (
-                                msg.contains("400") || msg.contains("Bad Request")
-                            ) && (
-                                msg.contains("tool")
-                                || msg.contains("function")
-                                || msg.contains("Input validation error")
-                                || (msg.contains("not supported") && !msg.contains("max_tokens"))
-                            ) && !msg.contains("max_tokens")
-                              && !msg.contains("temperature")
-                              && !msg.contains("context_length")
-                        );
-                        if is_tool_candidate {
-                            warn!(
-                                error = %err_str,
-                                model = %self.model,
-                                "Native tool calling failed — falling back to prompted JSON mode"
-                            );
-                            prompted_mode = true;
-                            // Don't count this as a circuit breaker failure —
-                            // it's a capability mismatch, not a provider outage.
-                            continue;
+            } else {
+                temm1e_distill::types::RouteDecision::Cloud
+            };
+
+            let response = match eigentune_route {
+                temm1e_distill::types::RouteDecision::Cloud => {
+                    // Default unchanged path — preserves the existing
+                    // prompted-tool-calling fallback logic verbatim.
+                    match self.provider.complete(request.clone()).await {
+                        Ok(resp) => {
+                            self.circuit_breaker.record_success();
+                            resp
+                        }
+                        Err(e) => {
+                            // ── Prompted Tool Calling Fallback ─────────────────────
+                            // If the provider returned an error and the request had
+                            // tools, this might be a model that doesn't support native
+                            // function calling.  Switch to prompted mode and retry.
+                            if request_had_tools && !prompted_mode {
+                                let err_str = format!("{e}");
+                                let is_tool_candidate = matches!(&e,
+                                    Temm1eError::Provider(msg) if (
+                                        msg.contains("400") || msg.contains("Bad Request")
+                                    ) && (
+                                        msg.contains("tool")
+                                        || msg.contains("function")
+                                        || msg.contains("Input validation error")
+                                        || (msg.contains("not supported") && !msg.contains("max_tokens"))
+                                    ) && !msg.contains("max_tokens")
+                                      && !msg.contains("temperature")
+                                      && !msg.contains("context_length")
+                                );
+                                if is_tool_candidate {
+                                    warn!(
+                                        error = %err_str,
+                                        model = %self.model,
+                                        "Native tool calling failed — falling back to prompted JSON mode"
+                                    );
+                                    prompted_mode = true;
+                                    continue;
+                                }
+                            }
+                            self.circuit_breaker.record_failure();
+                            return Err(e);
                         }
                     }
-                    self.circuit_breaker.record_failure();
-                    return Err(e);
+                }
+
+                temm1e_distill::types::RouteDecision::Local(endpoint) => {
+                    // ── Gate 5: 30s timeout + automatic cloud fallback ────
+                    let local_provider = temm1e_providers::OpenAICompatProvider::new(String::new())
+                        .with_base_url(endpoint.base_url.clone());
+                    let mut local_req = request.clone();
+                    local_req.model = endpoint.model_name.clone();
+                    let local_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        local_provider.complete(local_req),
+                    )
+                    .await;
+                    match local_result {
+                        Ok(Ok(resp)) => {
+                            tracing::info!(
+                                model = %endpoint.model_name,
+                                tier = %eigentune_complexity,
+                                "Eigen-Tune: served from local model"
+                            );
+                            self.circuit_breaker.record_success();
+                            resp
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                model = %endpoint.model_name,
+                                error = %e,
+                                "Eigen-Tune: local call failed, falling back to cloud"
+                            );
+                            match self.provider.complete(request.clone()).await {
+                                Ok(resp) => {
+                                    self.circuit_breaker.record_success();
+                                    resp
+                                }
+                                Err(e) => {
+                                    self.circuit_breaker.record_failure();
+                                    return Err(e);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                model = %endpoint.model_name,
+                                "Eigen-Tune: local call timed out (30s), falling back to cloud"
+                            );
+                            match self.provider.complete(request.clone()).await {
+                                Ok(resp) => {
+                                    self.circuit_breaker.record_success();
+                                    resp
+                                }
+                                Err(e) => {
+                                    self.circuit_breaker.record_failure();
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                temm1e_distill::types::RouteDecision::Monitor(endpoint) => {
+                    // Local serves; cloud sampled in parallel for CUSUM drift detection (Gate 4).
+                    let local_provider = temm1e_providers::OpenAICompatProvider::new(String::new())
+                        .with_base_url(endpoint.base_url.clone());
+                    let mut local_req = request.clone();
+                    local_req.model = endpoint.model_name.clone();
+                    let local_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        local_provider.complete(local_req),
+                    )
+                    .await;
+                    match local_result {
+                        Ok(Ok(local_resp)) => {
+                            // Fire-and-forget cloud comparison for CUSUM
+                            if let Some(et) = self.eigen_tune.clone() {
+                                let cloud_provider = self.provider.clone();
+                                let req_clone = request.clone();
+                                let tier = temm1e_distill::types::EigenTier::from_str(
+                                    &eigentune_complexity,
+                                );
+                                let local_text = response_to_text(&local_resp);
+                                tokio::spawn(async move {
+                                    if let Ok(Ok(cloud_resp)) = tokio::time::timeout(
+                                        std::time::Duration::from_secs(30),
+                                        cloud_provider.complete(req_clone),
+                                    )
+                                    .await
+                                    {
+                                        let cloud_text = response_to_text(&cloud_resp);
+                                        let agree = temm1e_distill::judge::embedding::cheap_equivalence_check(
+                                            &local_text, &cloud_text,
+                                        )
+                                        .unwrap_or(true);
+                                        et.on_monitor_observation(tier, agree).await;
+                                    }
+                                });
+                            }
+                            self.circuit_breaker.record_success();
+                            local_resp
+                        }
+                        _ => {
+                            tracing::warn!(
+                                "Eigen-Tune: monitor-mode local call failed, falling back to cloud"
+                            );
+                            match self.provider.complete(request.clone()).await {
+                                Ok(resp) => {
+                                    self.circuit_breaker.record_success();
+                                    resp
+                                }
+                                Err(e) => {
+                                    self.circuit_breaker.record_failure();
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                temm1e_distill::types::RouteDecision::Shadow(endpoint) => {
+                    // Cloud serves the user; local runs in parallel for SPRT evidence.
+                    let cloud_resp = match self.provider.complete(request.clone()).await {
+                        Ok(resp) => {
+                            self.circuit_breaker.record_success();
+                            resp
+                        }
+                        Err(e) => {
+                            self.circuit_breaker.record_failure();
+                            return Err(e);
+                        }
+                    };
+
+                    if let Some(et) = self.eigen_tune.clone() {
+                        let endpoint_clone = endpoint.clone();
+                        let req_clone = request.clone();
+                        let tier =
+                            temm1e_distill::types::EigenTier::from_str(&eigentune_complexity);
+                        let cloud_text = response_to_text(&cloud_resp);
+                        tokio::spawn(async move {
+                            let local_provider =
+                                temm1e_providers::OpenAICompatProvider::new(String::new())
+                                    .with_base_url(endpoint_clone.base_url.clone());
+                            let mut local_req = req_clone;
+                            local_req.model = endpoint_clone.model_name.clone();
+                            if let Ok(Ok(local_resp)) = tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                local_provider.complete(local_req),
+                            )
+                            .await
+                            {
+                                let local_text = response_to_text(&local_resp);
+                                let agree =
+                                    temm1e_distill::judge::embedding::cheap_equivalence_check(
+                                        &local_text,
+                                        &cloud_text,
+                                    )
+                                    .unwrap_or(true);
+                                et.on_shadow_observation(tier, agree).await;
+                            }
+                        });
+                    }
+                    cloud_resp
                 }
             };
+
+            // ── Eigen-Tune: collection hook (fire-and-forget, Phase 11) ──
+            if let Some(et) = &self.eigen_tune {
+                let engine = et.clone();
+                let pair_data = temm1e_distill::collector::EigenTunePairData {
+                    messages_json: serde_json::to_string(&request.messages).unwrap_or_default(),
+                    system_prompt: request.system.clone(),
+                    tools_json: if request.tools.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_string(&request.tools).unwrap_or_default())
+                    },
+                    response_json: serde_json::to_string(&response).unwrap_or_default(),
+                    model: self.model.clone(),
+                    provider: self.provider.name().to_string(),
+                    complexity: eigentune_complexity.clone(),
+                    conversation_id: msg.chat_id.clone(),
+                    turn: session.history.len() as i32,
+                    tokens_in: Some(response.usage.input_tokens),
+                    tokens_out: Some(response.usage.output_tokens),
+                    cost_usd: None, // call_cost is computed in the next block
+                };
+                tokio::spawn(async move {
+                    engine.on_completion(pair_data).await;
+                });
+            }
 
             // Record usage and cost
             let call_cost = budget::calculate_cost(
@@ -1947,6 +2303,20 @@ impl AgentRuntime {
                     }
                     Err(e) => (format!("Tool execution error: {}", e), true),
                 };
+
+                // ── Eigen-Tune: tool result signal (Phase 12, fire-and-forget) ──
+                if let Some(et) = &self.eigen_tune {
+                    let engine = et.clone();
+                    let chat_id = msg.chat_id.clone();
+                    let signal = if is_error {
+                        temm1e_distill::types::QualitySignal::ResponseError
+                    } else {
+                        temm1e_distill::types::QualitySignal::ToolCallSucceeded
+                    };
+                    tokio::spawn(async move {
+                        engine.on_signal(&chat_id, signal).await;
+                    });
+                }
 
                 // ── Self-Correction: track failures and inject strategy rotation ──
                 if is_error {

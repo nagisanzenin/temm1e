@@ -8,6 +8,8 @@ description = "Agent runtime for TEMM1E"
 
 [dependencies]
 temm1e-core.workspace = true
+temm1e-distill.workspace = true
+temm1e-providers.workspace = true
 temm1e-vault.workspace = true
 tokio.workspace = true
 futures.workspace = true
