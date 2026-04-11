@@ -290,6 +290,10 @@ v1 treats every message the same. v2 classifies each message into a complexity t
 
 ### Many Tems — Swarm Intelligence
 
+<p align="center">
+  <img src="assets/tem-swarm-overview.png" alt="Many Tems Swarm Intelligence Overview" width="100%">
+</p>
+
 What if complex tasks could be split across multiple Tems working in parallel? Many Tems is a stigmergic swarm intelligence runtime — workers coordinate through time-decaying scent signals and a shared Den (SQLite), not LLM-to-LLM chat. Zero coordination tokens.
 
 The Alpha (coordinator) decomposes complex orders into a task DAG. Tems claim tasks via atomic SQLite transactions, execute with task-scoped context (no history accumulation), and emit scent signals that guide other Tems.
@@ -309,6 +313,10 @@ Enabled by default in v3.0.0. Disable: `[pack] enabled = false`. Invisible for s
 [Research paper →](docs/swarm/RESEARCH_PAPER.md) · [Full experiment report →](docs/swarm/experiment_artifacts/EXPERIMENT_REPORT.md) · [Design doc →](tems_lab/swarm/DESIGN.md)
 
 ### Eigen-Tune — Self-Tuning Knowledge Distillation
+
+<p align="center">
+  <img src="assets/tem-eigentune-overview.png" alt="Eigen-Tune Distillation Overview" width="100%">
+</p>
 
 Every LLM call is a training example being thrown away. Eigen-Tune captures them, scores quality from user behavior, trains a local model, and graduates it through statistical gates — zero added LLM cost.
 
@@ -392,6 +400,10 @@ temm1e eigentune demote simple   # force a tier back to Collecting
 
 ### Unified Artifact Value Function — The Mathematics of Self-Learning
 
+<p align="center">
+  <img src="assets/tem-artifact-value-overview.png" alt="Unified Artifact Value Function Overview" width="100%">
+</p>
+
 Traditional ML adjusts numeric weights. TEMM1E adjusts **structured artifacts** — memories, lessons, blueprints, training pairs. The unified artifact value function scores every artifact across every self-learning subsystem:
 
 ```
@@ -415,6 +427,10 @@ Half-lives are ordered by artifact persistence: **memories < learnings < bluepri
 [Full mathematical framework →](tems_lab/ARTIFACT_VALUE_FUNCTION.md) · [Audit report →](docs/design/SELF_LEARNING_AUDIT.md)
 
 ### Tem Prowl — Web-Native Browsing with OTK Authentication
+
+<p align="center">
+  <img src="assets/tem-prowl-overview.png" alt="Tem Prowl Web Browsing Overview" width="100%">
+</p>
 
 The web is where humans live. Tem Prowl is a messaging-first web agent architecture — I browse websites autonomously behind a chat interface and report structured results back through messages. No live viewport. No shoulder-surfing. Just results.
 
@@ -796,6 +812,10 @@ Trust is **earned through track record**: 10 successful Level 3 changes graduate
 ---
 
 ## Interactive TUI
+
+<p align="center">
+  <img src="assets/tem-tui-overview.png" alt="TEMM1E Interactive TUI" width="100%">
+</p>
 
 `temm1e tui` gives you a Claude Code-level terminal experience — talk to Tem directly from your terminal with rich markdown rendering, syntax-highlighted code blocks, and real-time agent observability.
 
