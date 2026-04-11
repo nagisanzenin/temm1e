@@ -50,6 +50,26 @@ impl Default for FailoverConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Word-split AND matching, consistent with the primary SQLite search
+/// semantics.  Each whitespace-delimited word in `query` must appear
+/// (case-insensitive) in either `content` or `id`.
+fn matches_query(entry: &MemoryEntry, query: &str) -> bool {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.is_empty() {
+        return true;
+    }
+    let content_lower = entry.content.to_lowercase();
+    let id_lower = entry.id.to_lowercase();
+    words.iter().all(|w| {
+        let wl = w.to_lowercase();
+        content_lower.contains(&wl) || id_lower.contains(&wl)
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Internal shared state
 // ---------------------------------------------------------------------------
 
@@ -329,7 +349,7 @@ impl Memory for ResilientMemory {
                 // Merge any cached entries that match the query.
                 let state = self.state.read().await;
                 for entry in state.cache.values() {
-                    if entry.content.contains(query) && !results.iter().any(|r| r.id == entry.id) {
+                    if matches_query(entry, query) && !results.iter().any(|r| r.id == entry.id) {
                         // Respect filters.
                         if let Some(ref session) = opts.session_filter {
                             if entry.session_id.as_deref() != Some(session.as_str()) {
@@ -357,7 +377,7 @@ impl Memory for ResilientMemory {
                     .cache
                     .values()
                     .filter(|entry| {
-                        if !entry.content.contains(query) {
+                        if !matches_query(entry, query) {
                             return false;
                         }
                         if let Some(ref session) = opts.session_filter {

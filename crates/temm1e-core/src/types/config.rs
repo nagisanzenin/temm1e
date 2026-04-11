@@ -403,9 +403,17 @@ impl ProviderConfig {
     /// If `keys` is non-empty, returns `keys`. Otherwise falls back to `api_key`.
     pub fn all_keys(&self) -> Vec<String> {
         if !self.keys.is_empty() {
-            self.keys.clone()
+            self.keys
+                .iter()
+                .filter(|k| !k.is_empty())
+                .cloned()
+                .collect()
         } else if let Some(ref key) = self.api_key {
-            vec![key.clone()]
+            if key.is_empty() {
+                vec![]
+            } else {
+                vec![key.clone()]
+            }
         } else {
             vec![]
         }

@@ -2946,7 +2946,7 @@ async fn main() -> Result<()> {
                         let social_config_for_worker = social_config_captured.clone();
                         let slot = slots.entry(chat_id.clone()).or_insert_with(|| {
                             let (chat_tx, mut chat_rx) =
-                                tokio::sync::mpsc::channel::<temm1e_core::types::message::InboundMessage>(4);
+                                tokio::sync::mpsc::channel::<temm1e_core::types::message::InboundMessage>(32);
 
                             let interrupt = Arc::new(AtomicBool::new(false));
                             let is_heartbeat = Arc::new(AtomicBool::new(false));
