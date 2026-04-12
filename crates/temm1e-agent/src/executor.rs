@@ -709,7 +709,10 @@ mod tests {
         };
 
         let result = validate_sandbox(&tool, &session);
-        assert!(result.is_ok(), "validate_sandbox should allow /etc/hosts in v5.1.1");
+        assert!(
+            result.is_ok(),
+            "validate_sandbox should allow /etc/hosts in v5.1.1"
+        );
     }
 
     #[test]
