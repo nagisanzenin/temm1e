@@ -811,7 +811,11 @@ Trust is **earned through track record**: 10 successful Level 3 changes graduate
 
 ---
 
-## Interactive TUI
+## Tem's Features — Out of the Box
+
+Everything in this group is stable, shipped, and works the moment you install Tem. No research preview, no paper behind it, no "coming soon." These are the capabilities you actually use day-to-day — the daily drivers. Contrast with [Tem's Lab](#tems-lab--research-that-ships) above, which is where cognitive systems get stress-tested before they graduate here.
+
+### Interactive TUI
 
 <p align="center">
   <img src="assets/tem-tui-overview.png" alt="TEMM1E Interactive TUI" width="100%">
@@ -848,9 +852,7 @@ Trust is **earned through track record**: 10 successful Level 3 changes graduate
 
 > **Install globally:** `cp target/release/temm1e ~/.local/bin/temm1e` then run `temm1e tui` from anywhere.
 
----
-
-## Role-Based Access Control
+### Role-Based Access Control
 
 <p align="center">
   <img src="assets/rbac.png" alt="TEMM1E RBAC Overview" width="100%">
@@ -877,6 +879,61 @@ TEMM1E enforces **two roles** across all messaging channels — so you can safel
 Finding user IDs: Telegram (`@userinfobot`), Discord (Developer Mode → Copy User ID), Slack (Profile → Copy member ID), WhatsApp (phone number as digits).
 
 > Full docs: [`docs/RBAC.md`](docs/RBAC.md)
+
+### Unified Web Search — Parallel Fan-Out
+
+<p align="center">
+  <img src="assets/web-search-overview.png" alt="TEMM1E Unified Web Search — Parallel Fan-Out" width="100%">
+</p>
+
+One tool the agent sees as `web_search`. Underneath, a dispatcher fans out across **13 backends in parallel**, merges the results by URL, and returns a ranked list with a self-describing footer. **9 of those backends are free, no-key, and auto-enabled on every install** — zero setup, zero env vars, zero accounts. Paid backends slot in only when you explicitly set their key. Every other agent framework I looked at either ships one tool per provider (LangChain, crewAI, smolagents) or a single hidden-config switch (AnythingLLM, Open WebUI, LobeChat) — parallel multi-backend fan-out inside one tool call is not something I found elsewhere.
+
+**Free out of the box — no API keys, ever:**
+
+| Backend | Best for |
+|:--------|:---------|
+| `hackernews` | Tech news, Show HN, Ask HN (Algolia search) |
+| `wikipedia` | Facts, definitions, entities, history |
+| `github` | Code, repositories, projects |
+| `stackoverflow` | Programming Q&A, error messages, accepted-answer markers |
+| `reddit` | Community discussions, opinions, niche subreddits |
+| `marginalia` | Blogs, essays, long-form small-web writing |
+| `arxiv` | Research papers (CS, math, physics) |
+| `pubmed` | Biomedical and life sciences |
+| `duckduckgo` | General web catch-all (Chrome UA, rate-governed) |
+
+**Opt-in upgrades (activated automatically when you want them):**
+
+| Backend | How to enable |
+|:--------|:--------------|
+| `searxng` | `temm1e search install` — detects docker/podman, writes `settings.yml`, starts the container, verifies the endpoint, persists the URL to your config |
+| `exa` | `export EXA_API_KEY=...` — neural search |
+| `brave` | `export BRAVE_API_KEY=...` — Brave Search API |
+| `tavily` | `export TAVILY_API_KEY=...` — Tavily search + answer mode |
+
+**How it works** — one call, four stages:
+
+1. **Dispatch.** Agent calls `web_search("your query")`. Default mix picks a sensible free subset; the agent can override with `backends=["hackernews","github"]` any time.
+2. **Parallel fan-out.** Every selected backend fires concurrently via `tokio::task::JoinSet` with an 8-second timeout. Slow backends can't block fast ones. Failed backends don't block successful ones.
+3. **Merge + dedupe.** URLs are normalized (strip utm/fbclid/ref, lowercase host, drop trailing slash), grouped by the normalized key, and merged with an `also_in` field so the agent sees which sources corroborated the same link. Results are weighted-scored and sorted.
+4. **Smart footer.** Every response ends with a self-describing manifest so the agent knows exactly what it could have tried and what to retry with:
+
+```
+─────
+Used:        hackernews, wikipedia, github
+Available:   hackernews, wikipedia, github, stackoverflow, reddit, marginalia, arxiv, pubmed, duckduckgo
+Not enabled: searxng (run `temm1e search install`), exa (set EXA_API_KEY), brave (set BRAVE_API_KEY), tavily (set TAVILY_API_KEY)
+Failed:      reddit (rate limit, retry in 4s)
+Hint:        results look thin. Try `backends=["stackoverflow"]` for deeper programming Q&A.
+```
+
+**The footer pattern is the key design choice.** Instead of surfacing the backend catalog through admin UI or static system prompts — the pattern every competitor uses — the tool response itself teaches the agent what exists, at every call. When auto-mix comes back weak, the agent reads the manifest and retries with `backends=[...]`. No prompt engineering. No inner classifier LLM call. No orchestration code. Just self-describing tool output.
+
+**Three context-budget knobs** — `max_results` (1-30), `max_total_chars` (1K-16K), `max_snippet_chars` (50-500) — all clamped to hard caps, all UTF-8 safe, all reported in the footer when clamping or truncation happens. Small-context agents can shrink the budget; deep-research workflows can dial it up. No more raw-response context blowouts.
+
+**Roadmap gaps** (we're not hiding them): no semantic reranker yet, no streaming, no deep-research loop, no per-query circuit breaker on failing backends. That's the v5.3 shortlist.
+
+> Full design trail: [`docs/web_search/RESEARCH.md`](docs/web_search/RESEARCH.md) — landscape & live verification · [`IMPLEMENTATION_PLAN.md`](docs/web_search/IMPLEMENTATION_PLAN.md) — phases, schemas · [`IMPLEMENTATION_DETAILS.md`](docs/web_search/IMPLEMENTATION_DETAILS.md) — per-backend specs · [`HARMONY_AUDIT.md`](docs/web_search/HARMONY_AUDIT.md) — 14 risk dimensions, all ZERO before code
 
 ---
 
