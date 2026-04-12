@@ -95,7 +95,11 @@ impl Tool for CodeEditTool {
             .unwrap_or(false);
 
         // ── Resolve path ─────────────────────────────────────────────
-        let path = crate::file::resolve_path(path_str, &ctx.workspace_path)?;
+        let path = crate::file::resolve_path(
+            path_str,
+            &ctx.workspace_path,
+            crate::file::Operation::Write,
+        )?;
 
         // ── Read-tracker gate ────────────────────────────────────────
         if let Some(ref tracker) = ctx.read_tracker {

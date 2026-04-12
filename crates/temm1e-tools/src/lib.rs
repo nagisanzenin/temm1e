@@ -19,6 +19,7 @@ pub mod custom_tools;
 #[cfg(feature = "desktop-control")]
 pub mod desktop_tool;
 mod file;
+pub mod file_safety;
 mod git;
 pub mod grounding;
 mod key_manage;

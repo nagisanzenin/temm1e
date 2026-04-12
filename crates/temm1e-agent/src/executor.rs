@@ -401,34 +401,19 @@ pub async fn execute_tool(
     }
 }
 
-/// Validate runtime arguments from the tool call's JSON against workspace scope.
+/// Validate runtime arguments from the tool call's JSON.
 ///
-/// This catches path traversal and out-of-scope file access in the actual
-/// arguments the LLM provides at call time, not just the static declarations.
+/// As of v5.1.1, file path arguments are NOT validated against the workspace
+/// here — Tem has full filesystem access. Catastrophic-write protection is
+/// enforced inside the file tool's `resolve_path()` via `file_safety`.
+/// This function still validates shell commands against the dangerous-pattern
+/// denylist.
 fn validate_arguments(
     tool_name: &str,
     arguments: &serde_json::Value,
-    session: &SessionContext,
+    _session: &SessionContext,
 ) -> Result<(), Temm1eError> {
-    // Validate file path arguments
-    let path_keys = [
-        "path",
-        "file",
-        "file_path",
-        "directory",
-        "dir",
-        "target",
-        "destination",
-        "src",
-        "dest",
-    ];
     if let serde_json::Value::Object(map) = arguments {
-        for key in &path_keys {
-            if let Some(serde_json::Value::String(path_str)) = map.get(*key) {
-                validate_path_in_workspace(tool_name, path_str, session)?;
-            }
-        }
-
         // Validate shell/command arguments for dangerous patterns
         if let Some(serde_json::Value::String(cmd)) = map.get("command") {
             validate_shell_command(tool_name, cmd)?;
@@ -439,80 +424,6 @@ fn validate_arguments(
     }
 
     Ok(())
-}
-
-/// Validate that a file path argument resolves to within the workspace.
-fn validate_path_in_workspace(
-    tool_name: &str,
-    path_str: &str,
-    session: &SessionContext,
-) -> Result<(), Temm1eError> {
-    let path = std::path::Path::new(path_str);
-    let workspace = &session.workspace_path;
-
-    let abs_path = if path.is_relative() {
-        workspace.join(path)
-    } else {
-        path.to_path_buf()
-    };
-
-    let workspace_canonical = workspace
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.clone());
-
-    // For existing paths, canonicalize to resolve symlinks and ..
-    // For non-existent paths, reject them if they can't be validated
-    let path_canonical = match abs_path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            // Path does not exist yet; do lexical normalization to catch traversal
-            let normalized = lexical_normalize(&abs_path);
-            if !normalized.starts_with(&workspace_canonical) {
-                return Err(Temm1eError::SandboxViolation(format!(
-                    "Tool '{}' argument path '{}' escapes workspace '{}'",
-                    tool_name,
-                    path_str,
-                    workspace.display()
-                )));
-            }
-            return Ok(());
-        }
-    };
-
-    if !path_canonical.starts_with(&workspace_canonical) {
-        return Err(Temm1eError::SandboxViolation(format!(
-            "Tool '{}' argument path '{}' is outside workspace '{}'",
-            tool_name,
-            path_str,
-            workspace.display()
-        )));
-    }
-
-    Ok(())
-}
-
-/// Lexically normalize a path by resolving `.` and `..` components without I/O.
-fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                // Only pop if there's a Normal component to pop
-                if parts
-                    .last()
-                    .is_some_and(|c| matches!(c, Component::Normal(_)))
-                {
-                    parts.pop();
-                } else {
-                    parts.push(component);
-                }
-            }
-            Component::CurDir => {} // skip
-            _ => parts.push(component),
-        }
-    }
-    parts.iter().collect()
 }
 
 /// Validate that a shell command does not contain dangerous patterns.
@@ -530,11 +441,13 @@ fn validate_shell_command(tool_name: &str, command: &str) -> Result<(), Temm1eEr
 }
 
 /// Validate that a tool's declared resource access is within the session's workspace scope.
-fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Temm1eError> {
+fn validate_sandbox(tool: &dyn Tool, _session: &SessionContext) -> Result<(), Temm1eError> {
     let declarations = tool.declarations();
-    let workspace = &session.workspace_path;
 
-    // Check file access paths are within the workspace
+    // As of v5.1.1, declared file_access paths are no longer validated against
+    // the workspace — Tem has full filesystem access. The only check that
+    // remains is rejecting parent-dir traversal in declarations, since that
+    // would indicate a malformed tool registration.
     for path_access in &declarations.file_access {
         let path_str = match path_access {
             PathAccess::Read(p) => p,
@@ -543,15 +456,6 @@ fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Tem
         };
 
         let path = std::path::Path::new(path_str);
-
-        // Skip home-relative paths (e.g., "~/.temm1e/sessions")
-        if path_str.starts_with("~/") || path_str == "~" {
-            continue;
-        }
-
-        // Reject paths containing ".." traversal components — catches
-        // attacks like "../../etc/shadow" without needing the target to
-        // exist on disk (which canonicalize() requires).
         if path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -560,29 +464,6 @@ fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Tem
                 "Tool '{}' declares access to '{}' which contains path traversal (..)",
                 tool.name(),
                 path_str,
-            )));
-        }
-
-        // Resolve to absolute if relative
-        let abs_path = if path.is_relative() {
-            workspace.join(path)
-        } else {
-            path.to_path_buf()
-        };
-
-        // Canonicalize workspace for comparison (best-effort)
-        let workspace_canonical = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.clone());
-
-        let path_canonical = abs_path.canonicalize().unwrap_or(abs_path);
-
-        if !path_canonical.starts_with(&workspace_canonical) {
-            return Err(Temm1eError::SandboxViolation(format!(
-                "Tool '{}' declares access to '{}' which is outside workspace '{}'",
-                tool.name(),
-                path_str,
-                workspace.display()
             )));
         }
     }
@@ -800,13 +681,16 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_rejects_path_outside_workspace() {
+    fn sandbox_allows_path_outside_workspace_v511() {
+        // v5.1.1: Tem has full computer access. Declared paths outside the
+        // workspace are allowed; only catastrophic writes (enforced by file_safety
+        // inside the file tool) are blocked.
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
 
-        let tool = MockTool::new("evil_tool").with_declarations(ToolDeclarations {
-            file_access: vec![PathAccess::Write("/etc/passwd".to_string())],
+        let tool = MockTool::new("file_tool").with_declarations(ToolDeclarations {
+            file_access: vec![PathAccess::Write("/etc/hosts".to_string())],
             network_access: Vec::new(),
             shell_access: false,
         });
@@ -825,11 +709,7 @@ mod tests {
         };
 
         let result = validate_sandbox(&tool, &session);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            Temm1eError::SandboxViolation(_)
-        ));
+        assert!(result.is_ok(), "validate_sandbox should allow /etc/hosts in v5.1.1");
     }
 
     #[test]
@@ -916,12 +796,14 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_rejects_absolute_path_to_root() {
+    fn sandbox_allows_root_declaration_v511() {
+        // v5.1.1: Tools may declare access to / (full filesystem). The actual
+        // catastrophic-write protection is enforced inside the file tool.
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
 
-        let tool = MockTool::new("root_access").with_declarations(ToolDeclarations {
+        let tool = MockTool::new("file_tool").with_declarations(ToolDeclarations {
             file_access: vec![PathAccess::ReadWrite("/".to_string())],
             network_access: Vec::new(),
             shell_access: false,
@@ -941,7 +823,7 @@ mod tests {
         };
 
         let result = validate_sandbox(&tool, &session);
-        assert!(result.is_err());
+        assert!(result.is_ok(), "validate_sandbox should allow / in v5.1.1");
     }
 
     #[test]
@@ -1008,7 +890,10 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_one_bad_path_among_multiple_fails() {
+    fn sandbox_allows_multiple_paths_v511() {
+        // v5.1.1: Multiple declared paths including system paths are allowed
+        // at the sandbox layer. The catastrophic-write protection lives in
+        // the file tool itself via file_safety::is_catastrophic_write.
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(workspace.join("valid")).unwrap();
@@ -1016,7 +901,7 @@ mod tests {
         let tool = MockTool::new("mixed_tool").with_declarations(ToolDeclarations {
             file_access: vec![
                 PathAccess::Read("valid".to_string()),
-                PathAccess::Write("/etc/shadow".to_string()),
+                PathAccess::Write("/etc/hosts".to_string()),
             ],
             network_access: Vec::new(),
             shell_access: false,
@@ -1036,7 +921,7 @@ mod tests {
         };
 
         let result = validate_sandbox(&tool, &session);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

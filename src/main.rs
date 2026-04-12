@@ -1475,6 +1475,9 @@ async fn main() -> Result<()> {
         tracing::info!(mode = %cli.mode, "TEMM1E starting");
     }
 
+    // Initialize file safety guards (captures running binary path for self-protection)
+    temm1e_tools::file_safety::init();
+
     match cli.command {
         Commands::Stop => {
             match read_pid_file() {

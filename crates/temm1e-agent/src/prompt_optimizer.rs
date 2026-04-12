@@ -292,7 +292,9 @@ impl<'a> SystemPromptBuilder<'a> {
         PromptSection {
             name: "workspace",
             text: format!(
-                "Workspace: {}. All file ops use this directory. User-sent files are saved here automatically.",
+                "Default directory: {}. Relative paths resolve here. User-sent files are saved here. \
+                 You have FULL filesystem access — read and write anywhere the user can reach (~/code, /etc, /var/log, anywhere). \
+                 The only blocked writes are catastrophic system paths (bootloader, /etc/shadow, /etc/sudoers, raw disk devices) and the running Tem binary itself.",
                 ws.display()
             ),
         }
@@ -303,10 +305,12 @@ impl<'a> SystemPromptBuilder<'a> {
             name: "file_protocol",
             text: concat!(
                 "File protocol:\n",
-                "- Use file_read for received files\n",
+                "- file_read works on ANY path the user's account can read (not limited to workspace)\n",
+                "- file_write works on ANY path except catastrophic system paths\n",
+                "- Use absolute paths freely: /etc/hosts, ~/code/other-project, /var/log/syslog\n",
                 "- send_file to deliver files (chat_id is automatic)\n",
                 "- file_write to create, then send_file to deliver\n",
-                "- Paths are relative to workspace"
+                "- Relative paths resolve against the default directory"
             )
             .to_string(),
         }
@@ -319,7 +323,7 @@ impl<'a> SystemPromptBuilder<'a> {
             lines.push("- shell: run commands, install packages, manage services");
         }
         if self.has_tool("file_read") || self.has_tool("file_write") || self.has_tool("file_list") {
-            lines.push("- file tools: read, write, list workspace files");
+            lines.push("- file tools: read, write, list files anywhere on the filesystem");
         }
         if self.has_tool("web_fetch") {
             lines.push("- web_fetch: look up docs, check APIs, research");
@@ -710,8 +714,8 @@ mod tests {
         let optimized_tokens = estimate_prompt_tokens(&optimized);
 
         assert!(
-            optimized_tokens < 1500,
-            "builder prompt ({} tokens) should stay under 1500 to avoid bloat",
+            optimized_tokens < 1600,
+            "builder prompt ({} tokens) should stay under 1600 to avoid bloat",
             optimized_tokens,
         );
     }
