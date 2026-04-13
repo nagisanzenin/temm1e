@@ -223,6 +223,38 @@ async fn law3_ledger_hash_chain_intact_after_verification() {
 }
 
 #[tokio::test]
+async fn runtime_with_witness_builder_attaches_witness() {
+    // Construct a minimal AgentRuntime with a Witness attached via the
+    // new with_witness() builder. This proves the plumbing compiles and
+    // the witness is reachable through the runtime.
+    use std::sync::Arc;
+    use temm1e_agent::runtime::AgentRuntime;
+    use temm1e_test_utils::{MockMemory, MockProvider};
+    use temm1e_witness::config::WitnessStrictness;
+
+    let (witness, dir) = bootstrap().await;
+
+    // Seal an Oath for a session and simulate an honest agent.
+    simulate_honest_agent(dir.path()).await;
+    let oath = code_oath("sess-runtime", dir.path());
+    let (_, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+
+    // Build a runtime with witness attached (Observe strictness so we
+    // can validate that the verdict flows through without mutating work).
+    let provider: Arc<dyn temm1e_core::traits::Provider> = Arc::new(MockProvider::with_text("ok"));
+    let memory: Arc<dyn temm1e_core::traits::Memory> = Arc::new(MockMemory::new());
+    let _runtime = AgentRuntime::new(provider, memory, vec![], "test-model".to_string(), None)
+        .with_witness(witness.clone(), WitnessStrictness::Observe, true);
+
+    // Confirm the Witness can still see the sealed oath via its own API.
+    // (The full runtime hook path is exercised when process_message runs;
+    // this smoke test validates the builder + crate graph.)
+    let active = witness.active_oath("sess-runtime").await.unwrap();
+    assert!(active.is_some(), "sealed oath should be visible");
+    assert_eq!(active.unwrap().subtask_id, "root");
+}
+
+#[tokio::test]
 async fn cross_session_ledger_isolation() {
     let (witness, dir) = bootstrap().await;
     simulate_honest_agent(dir.path()).await;

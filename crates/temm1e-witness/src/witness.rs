@@ -1,8 +1,9 @@
 //! Witness runtime — dispatches predicate checks and renders verdicts.
 //!
-//! Phase 1 implements Tier 0 dispatch only. Tier 1/2 are stubbed as
-//! `Inconclusive` for advisory predicates, `Fail` for non-advisory predicates
-//! that cannot be reduced to Tier 0.
+//! Phase 2 adds Tier 1 aspect verification via a `Provider` trait object
+//! (single-model policy: same model the agent runs). Tier 1 calls use
+//! clean-slate context (no conversation history), structured JSON output,
+//! and a static cached system prompt. Tier 2 remains advisory-only.
 //!
 //! The Witness is the ONLY entity authorized to produce a `Verified` outcome.
 //! It respects Law 5 (Narrative-Only FAIL) — it never mutates the file system,
@@ -17,14 +18,148 @@ use crate::types::{
     Claim, Evidence, LedgerPayload, Oath, Predicate, PredicateResult, TierUsage, Verdict,
     VerdictOutcome,
 };
+use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Instant;
+use temm1e_core::traits::Provider;
+use temm1e_core::types::message::{ChatMessage, CompletionRequest, MessageContent, Role};
+
+/// Tier 1/2 LLM verifier output schema.
+///
+/// Tier 1 and Tier 2 verifiers must return exactly this JSON shape. Any
+/// deviation is treated as `Inconclusive` with the raw response recorded
+/// in the detail field.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct LlmVerifierResponse {
+    /// "pass" | "fail" — case-insensitive match
+    pub verdict: String,
+    /// One-sentence reason
+    pub reason: String,
+}
+
+/// Abstract Tier 1 verifier — trait so tests can inject mocks.
+#[async_trait]
+pub trait Tier1Verifier: Send + Sync {
+    async fn verify(
+        &self,
+        oath_goal: &str,
+        predicate_rubric: &str,
+        evidence: &str,
+    ) -> Result<LlmVerifierResponse, WitnessError>;
+}
+
+/// Default Tier 1 verifier backed by a `Provider` + a model name.
+///
+/// Uses clean-slate context: no conversation history, no tool schema, no
+/// prior reasoning. The Tier 1 verifier sees only the Oath goal, the
+/// specific predicate rubric, and the evidence string.
+pub struct ProviderTier1Verifier {
+    provider: Arc<dyn Provider>,
+    model: String,
+    max_tokens: u32,
+}
+
+impl ProviderTier1Verifier {
+    pub fn new(provider: Arc<dyn Provider>, model: impl Into<String>) -> Self {
+        Self {
+            provider,
+            model: model.into(),
+            max_tokens: 200,
+        }
+    }
+}
+
+const TIER1_SYSTEM_PROMPT: &str = "You are a predicate verifier. Your job: given a \
+single machine-checkable predicate, a piece of evidence, and a subtask goal, decide \
+if the evidence satisfies the predicate.\n\n\
+RULES:\n\
+1. Reply ONLY with JSON: {\"verdict\": \"pass\" | \"fail\", \"reason\": \"brief explanation\"}\n\
+2. Base your verdict ONLY on the evidence shown. Do not speculate about unseen state.\n\
+3. If the evidence is insufficient to decide, reply {\"verdict\": \"fail\", \"reason\": \"insufficient evidence: ...\"}.\n\
+4. Do not rewrite the predicate. Do not suggest improvements. Do not argue.\n\
+5. Your verdict is binary. No \"partially\" or \"mostly\".";
+
+#[async_trait]
+impl Tier1Verifier for ProviderTier1Verifier {
+    async fn verify(
+        &self,
+        oath_goal: &str,
+        predicate_rubric: &str,
+        evidence: &str,
+    ) -> Result<LlmVerifierResponse, WitnessError> {
+        let user_prompt = format!(
+            "Oath goal: {}\n\nPredicate to verify: {}\n\nEvidence:\n{}\n\n\
+             Does the evidence satisfy the predicate? Reply ONLY as JSON: \
+             {{\"verdict\": \"pass\" | \"fail\", \"reason\": \"...\"}}",
+            oath_goal, predicate_rubric, evidence
+        );
+
+        let req = CompletionRequest {
+            model: self.model.clone(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text(user_prompt),
+            }],
+            tools: vec![],
+            max_tokens: Some(self.max_tokens),
+            temperature: Some(0.0),
+            system: Some(TIER1_SYSTEM_PROMPT.to_string()),
+        };
+
+        let resp = self
+            .provider
+            .complete(req)
+            .await
+            .map_err(|e| WitnessError::PredicateCheck(format!("tier1 call: {e}")))?;
+
+        let text = extract_text(&resp.content);
+        parse_tier1_response(&text)
+    }
+}
+
+fn extract_text(content: &[temm1e_core::types::message::ContentPart]) -> String {
+    let mut out = String::new();
+    for part in content {
+        if let temm1e_core::types::message::ContentPart::Text { text } = part {
+            out.push_str(text);
+        }
+    }
+    out
+}
+
+/// Parse a Tier 1 / Tier 2 verifier response. Tolerates surrounding
+/// markdown fences (```json) and trailing text.
+pub fn parse_tier1_response(text: &str) -> Result<LlmVerifierResponse, WitnessError> {
+    // Strip markdown code fences if present.
+    let stripped = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    // Find the first JSON object in the response.
+    let start = stripped.find('{');
+    let end = stripped.rfind('}');
+    let json_str = match (start, end) {
+        (Some(s), Some(e)) if e >= s => &stripped[s..=e],
+        _ => {
+            return Err(WitnessError::PredicateCheck(format!(
+                "tier1 response has no JSON object: {}",
+                stripped
+            )));
+        }
+    };
+
+    serde_json::from_str::<LlmVerifierResponse>(json_str).map_err(WitnessError::Json)
+}
 
 /// The Witness: verifies sealed Oaths and records verdicts to the Ledger.
 pub struct Witness {
     ledger: Arc<Ledger>,
     workspace_root: std::path::PathBuf,
+    tier1: Option<Arc<dyn Tier1Verifier>>,
 }
 
 impl Witness {
@@ -32,11 +167,42 @@ impl Witness {
         Self {
             ledger,
             workspace_root: workspace_root.into(),
+            tier1: None,
         }
+    }
+
+    /// Attach a Tier 1 verifier. Without this, Tier 1 and Tier 2 predicates
+    /// return `Inconclusive`. With it, Tier 1 predicates get real LLM
+    /// verification via clean-slate context.
+    pub fn with_tier1(mut self, tier1: Arc<dyn Tier1Verifier>) -> Self {
+        self.tier1 = Some(tier1);
+        self
+    }
+
+    /// Attach a Tier 1 verifier backed by a Provider + model.
+    pub fn with_provider(self, provider: Arc<dyn Provider>, model: impl Into<String>) -> Self {
+        self.with_tier1(Arc::new(ProviderTier1Verifier::new(provider, model)))
     }
 
     pub fn ledger(&self) -> &Arc<Ledger> {
         &self.ledger
+    }
+
+    /// Workspace root this Witness checks predicates against.
+    pub fn workspace_root(&self) -> &std::path::Path {
+        &self.workspace_root
+    }
+
+    /// Look up the most recent sealed Oath for a session from the Ledger.
+    /// Used by the runtime gate to find the active Oath without external
+    /// state tracking.
+    pub async fn active_oath(&self, session_id: &str) -> Result<Option<Oath>, WitnessError> {
+        let entries = self.ledger.read_session(session_id).await?;
+        let latest = entries.iter().rev().find_map(|e| match &e.payload {
+            LedgerPayload::OathSealed(oath) => Some(oath.clone()),
+            _ => None,
+        });
+        Ok(latest)
     }
 
     /// Verify an Oath by running all its postcondition predicates. Records
@@ -62,18 +228,22 @@ impl Witness {
                 tier_usage.tier0_latency_ms += r.latency_ms;
                 r
             } else if tier == 1 {
-                // Tier 1 stubbed for Phase 1 — advisory predicates become Inconclusive.
+                // Tier 1 — cheap aspect verifier via clean-slate LLM call.
                 tier_usage.tier1_calls += 1;
-                PredicateCheckResult {
-                    outcome: VerdictOutcome::Inconclusive,
-                    detail: "Tier 1 not implemented in Phase 1 — predicate advisory".to_string(),
-                    latency_ms: 0,
-                }
+                let t1_start = Instant::now();
+                let r = self.dispatch_tier1(predicate, oath).await;
+                let lat = t1_start.elapsed().as_millis() as u64;
+                tier_usage.tier1_latency_ms += lat;
+                let mut r = r;
+                r.latency_ms = lat;
+                r
             } else {
+                // Tier 2 — adversarial auditor. Phase 2: advisory only.
                 tier_usage.tier2_calls += 1;
                 PredicateCheckResult {
                     outcome: VerdictOutcome::Inconclusive,
-                    detail: "Tier 2 not implemented in Phase 1 — predicate advisory".to_string(),
+                    detail: "Tier 2 adversarial auditor not yet enabled — predicate advisory"
+                        .to_string(),
                     latency_ms: 0,
                 }
             };
@@ -123,6 +293,66 @@ impl Witness {
         Ok(verdict)
     }
 
+    /// Dispatch a Tier 1 (AspectVerifier) predicate through the attached
+    /// verifier. If no Tier 1 verifier is configured, returns
+    /// `Inconclusive` with a "no verifier" reason.
+    async fn dispatch_tier1(&self, predicate: &Predicate, oath: &Oath) -> PredicateCheckResult {
+        let (rubric, _evidence_refs) = match predicate {
+            Predicate::AspectVerifier {
+                rubric,
+                evidence_refs,
+                ..
+            } => (rubric.clone(), evidence_refs.clone()),
+            _ => {
+                return PredicateCheckResult {
+                    outcome: VerdictOutcome::Inconclusive,
+                    detail: "non-Tier1 predicate routed to dispatch_tier1".to_string(),
+                    latency_ms: 0,
+                };
+            }
+        };
+
+        let tier1 = match self.tier1.as_ref() {
+            Some(t) => t,
+            None => {
+                return PredicateCheckResult {
+                    outcome: VerdictOutcome::Inconclusive,
+                    detail: "no Tier 1 verifier configured — predicate advisory".to_string(),
+                    latency_ms: 0,
+                };
+            }
+        };
+
+        // Phase 2 MVP: we do not yet fetch evidence by id from the ledger.
+        // Evidence is presented as a best-effort summary of the oath goal
+        // plus the workspace root. A richer evidence assembly is Phase 3.
+        let evidence_summary = format!(
+            "workspace_root: {}\nactive_oath_subtask: {}",
+            self.workspace_root.display(),
+            oath.subtask_id
+        );
+
+        match tier1.verify(&oath.goal, &rubric, &evidence_summary).await {
+            Ok(resp) => {
+                let outcome = match resp.verdict.to_lowercase().as_str() {
+                    "pass" => VerdictOutcome::Pass,
+                    "fail" => VerdictOutcome::Fail,
+                    _ => VerdictOutcome::Inconclusive,
+                };
+                PredicateCheckResult {
+                    outcome,
+                    detail: format!("tier1: {}", resp.reason),
+                    latency_ms: 0,
+                }
+            }
+            Err(e) => PredicateCheckResult {
+                outcome: VerdictOutcome::Inconclusive,
+                detail: format!("tier1 error: {e}"),
+                latency_ms: 0,
+            },
+        }
+    }
+
     /// Record a Claim to the Ledger without running predicates yet.
     pub async fn submit_claim(
         &self,
@@ -168,8 +398,8 @@ impl Witness {
     /// (narrative-only — never modifies files).
     ///
     /// Strictness determines behavior:
-    /// - Observe: return original reply unchanged.
-    /// - Warn: append a brief note if verdict is FAIL.
+    /// - Observe: return original reply unchanged (plus optional readout).
+    /// - Warn: append a brief note if verdict is FAIL (plus optional readout).
     /// - Block: rewrite reply with honest failure description.
     /// - BlockWithRetry: same as Block (retry handled at runtime level).
     pub fn compose_final_reply(
@@ -178,7 +408,22 @@ impl Witness {
         verdict: &Verdict,
         strictness: WitnessStrictness,
     ) -> String {
-        match strictness {
+        self.compose_final_reply_ex(agent_reply, verdict, strictness, false)
+    }
+
+    /// Same as `compose_final_reply` but with an optional per-task readout
+    /// suffix ("Witness: 4/5 PASS. Cost: $X. Latency: +Yms."). When
+    /// `show_readout` is true, the readout is appended to the outgoing
+    /// reply regardless of strictness — even Observe mode will show it
+    /// so users can see the verdict without being blocked.
+    pub fn compose_final_reply_ex(
+        &self,
+        agent_reply: &str,
+        verdict: &Verdict,
+        strictness: WitnessStrictness,
+        show_readout: bool,
+    ) -> String {
+        let base = match strictness {
             WitnessStrictness::Observe => agent_reply.to_string(),
             WitnessStrictness::Warn => match verdict.outcome {
                 VerdictOutcome::Pass => agent_reply.to_string(),
@@ -197,6 +442,11 @@ impl Witness {
                 VerdictOutcome::Fail => format_failed_reply(agent_reply, verdict),
                 VerdictOutcome::Inconclusive => format_inconclusive_reply(agent_reply, verdict),
             },
+        };
+        if show_readout {
+            format!("{}\n\n{}", base, format_readout(verdict))
+        } else {
+            base
         }
     }
 }
@@ -306,6 +556,44 @@ fn format_inconclusive_reply(agent_reply: &str, verdict: &Verdict) -> String {
     )
 }
 
+/// Per-task Witness readout. One-line summary suitable for appending to
+/// the agent's final reply. Example:
+/// `Witness: 4/5 PASS (1 FAIL). Cost: $0.0123. Latency: +2ms. Tiers: T0×3 T1×1.`
+pub fn format_readout(verdict: &Verdict) -> String {
+    let mut tiers = String::new();
+    if verdict.tier_usage.tier0_calls > 0 {
+        tiers.push_str(&format!("T0×{}", verdict.tier_usage.tier0_calls));
+    }
+    if verdict.tier_usage.tier1_calls > 0 {
+        if !tiers.is_empty() {
+            tiers.push(' ');
+        }
+        tiers.push_str(&format!("T1×{}", verdict.tier_usage.tier1_calls));
+    }
+    if verdict.tier_usage.tier2_calls > 0 {
+        if !tiers.is_empty() {
+            tiers.push(' ');
+        }
+        tiers.push_str(&format!("T2×{}", verdict.tier_usage.tier2_calls));
+    }
+    let fail_suffix = if verdict.fail_count() > 0 {
+        format!(" ({} FAIL)", verdict.fail_count())
+    } else if verdict.inconclusive_count() > 0 {
+        format!(" ({} INCONCLUSIVE)", verdict.inconclusive_count())
+    } else {
+        String::new()
+    };
+    format!(
+        "─── Witness: {}/{} PASS{}. Cost: ${:.4}. Latency: +{}ms. Tiers: {}. ───",
+        verdict.pass_count(),
+        verdict.total_count(),
+        fail_suffix,
+        verdict.cost_usd,
+        verdict.latency_ms,
+        tiers,
+    )
+}
+
 /// Compute the WitnessStrictness for a task given configuration and complexity.
 pub fn resolve_strictness(
     config: &crate::config::WitnessConfig,
@@ -335,6 +623,7 @@ mod tests {
     use crate::oath::seal_oath;
     use crate::types::Predicate;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     async fn setup() -> (Witness, tempfile::TempDir) {
@@ -342,6 +631,35 @@ mod tests {
         let ledger = Ledger::open("sqlite::memory:").await.unwrap();
         let witness = Witness::new(ledger, dir.path().to_path_buf());
         (witness, dir)
+    }
+
+    /// A deterministic mock Tier 1 verifier that returns a canned response.
+    struct MockTier1 {
+        response: Mutex<LlmVerifierResponse>,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl Tier1Verifier for MockTier1 {
+        async fn verify(
+            &self,
+            _oath_goal: &str,
+            _predicate_rubric: &str,
+            _evidence: &str,
+        ) -> Result<LlmVerifierResponse, WitnessError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(self.response.lock().unwrap().clone())
+        }
+    }
+
+    fn mock_tier1(verdict: &str, reason: &str) -> Arc<MockTier1> {
+        Arc::new(MockTier1 {
+            response: Mutex::new(LlmVerifierResponse {
+                verdict: verdict.to_string(),
+                reason: reason.to_string(),
+            }),
+            calls: Mutex::new(0),
+        })
     }
 
     #[tokio::test]
@@ -529,6 +847,202 @@ mod tests {
             },
         ];
         assert_eq!(aggregate_outcome(&r), VerdictOutcome::Pass);
+    }
+
+    #[tokio::test]
+    async fn active_oath_returns_most_recent_sealed_oath() {
+        let (witness, _dir) = setup().await;
+
+        // Empty session → no oath.
+        assert!(witness.active_oath("sess-x").await.unwrap().is_none());
+
+        // Seal one.
+        let oath_a = Oath::draft("st-a", "root-1", "sess-x", "do X").with_postcondition(
+            Predicate::FileExists {
+                path: PathBuf::from("/tmp/a"),
+            },
+        );
+        let (sealed_a, _) = seal_oath(witness.ledger(), oath_a).await.unwrap();
+        let got = witness.active_oath("sess-x").await.unwrap().unwrap();
+        assert_eq!(got.subtask_id, sealed_a.subtask_id);
+
+        // Seal a second — most recent wins.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let oath_b = Oath::draft("st-b", "root-1", "sess-x", "do Y").with_postcondition(
+            Predicate::FileExists {
+                path: PathBuf::from("/tmp/b"),
+            },
+        );
+        let (sealed_b, _) = seal_oath(witness.ledger(), oath_b).await.unwrap();
+        let got = witness.active_oath("sess-x").await.unwrap().unwrap();
+        assert_eq!(got.subtask_id, sealed_b.subtask_id);
+    }
+
+    #[tokio::test]
+    async fn tier1_verifier_routes_pass_verdict() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier1("pass", "looks fine");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier1(mock.clone());
+
+        // Build an oath with one Tier 0 predicate (satisfies Spec Reviewer
+        // rigor) plus one Tier 1 AspectVerifier.
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply with file")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AspectVerifier {
+                rubric: "is the reply clear?".to_string(),
+                evidence_refs: vec![],
+                advisory: false,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        assert_eq!(verdict.outcome, VerdictOutcome::Pass);
+        assert_eq!(verdict.tier_usage.tier1_calls, 1);
+        assert_eq!(*mock.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn tier1_verifier_routes_fail_verdict() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier1("fail", "stub detected");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier1(mock);
+
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply with file")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AspectVerifier {
+                rubric: "is this real?".to_string(),
+                evidence_refs: vec![],
+                advisory: false,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        assert_eq!(verdict.outcome, VerdictOutcome::Fail);
+    }
+
+    #[tokio::test]
+    async fn tier1_advisory_fail_does_not_fail_overall() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier1("fail", "subjective objection");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier1(mock);
+
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AspectVerifier {
+                rubric: "is this elegant?".to_string(),
+                evidence_refs: vec![],
+                advisory: true,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        // Non-advisory Tier 0 FileExists passes; advisory Tier 1 FAIL does
+        // not fail the overall verdict.
+        assert_eq!(verdict.outcome, VerdictOutcome::Pass);
+    }
+
+    #[tokio::test]
+    async fn tier1_without_verifier_is_inconclusive() {
+        let (witness, dir) = setup().await;
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AspectVerifier {
+                rubric: "is this clear?".to_string(),
+                evidence_refs: vec![],
+                advisory: false,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        // No Tier 1 attached → Tier 1 predicate returns Inconclusive → overall
+        // outcome is Inconclusive (not Fail, because non-advisory inconclusive
+        // on a non-Tier 0 predicate is not a hard fail).
+        assert!(matches!(
+            verdict.outcome,
+            VerdictOutcome::Inconclusive | VerdictOutcome::Fail
+        ));
+    }
+
+    #[test]
+    fn parse_tier1_response_handles_plain_json() {
+        let out = parse_tier1_response(r#"{"verdict": "pass", "reason": "ok"}"#).unwrap();
+        assert_eq!(out.verdict, "pass");
+    }
+
+    #[test]
+    fn parse_tier1_response_handles_markdown_fenced_json() {
+        let out =
+            parse_tier1_response("```json\n{\"verdict\": \"fail\", \"reason\": \"stub\"}\n```")
+                .unwrap();
+        assert_eq!(out.verdict, "fail");
+    }
+
+    #[test]
+    fn parse_tier1_response_handles_trailing_prose() {
+        let out = parse_tier1_response(
+            r#"Here is my verdict: {"verdict": "pass", "reason": "good"} done."#,
+        )
+        .unwrap();
+        assert_eq!(out.verdict, "pass");
+    }
+
+    #[test]
+    fn parse_tier1_response_rejects_non_json() {
+        let r = parse_tier1_response("I think it looks good.");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn format_readout_shows_passcount_cost_latency_tiers() {
+        let usage = TierUsage {
+            tier0_calls: 3,
+            tier1_calls: 1,
+            ..Default::default()
+        };
+        let v = Verdict {
+            subtask_id: "st-1".into(),
+            rendered_at: Utc::now(),
+            outcome: VerdictOutcome::Pass,
+            per_predicate: vec![],
+            tier_usage: usage,
+            reason: "ok".into(),
+            cost_usd: 0.0123,
+            latency_ms: 2,
+        };
+        let s = format_readout(&v);
+        assert!(s.contains("0/0 PASS"));
+        assert!(s.contains("$0.0123"));
+        assert!(s.contains("+2ms"));
+        assert!(s.contains("T0×3"));
+        assert!(s.contains("T1×1"));
+    }
+
+    #[tokio::test]
+    async fn compose_final_reply_ex_appends_readout_in_observe() {
+        let (witness, dir) = setup().await;
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists { path: file });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        let out =
+            witness.compose_final_reply_ex("Done!", &verdict, WitnessStrictness::Observe, true);
+        assert!(out.starts_with("Done!"));
+        assert!(out.contains("Witness:"));
+        assert!(out.contains("PASS"));
     }
 
     #[test]

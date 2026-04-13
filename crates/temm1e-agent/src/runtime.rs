@@ -172,6 +172,15 @@ pub struct AgentRuntime {
     /// is also true. Mirrors `EigenTuneConfig::enable_local_routing` so the
     /// runtime doesn't need to read config on every request.
     eigen_tune_local_routing: bool,
+    /// Witness verification layer. When set, the runtime looks up an active
+    /// `Oath` for the current session after the agent decides it is done, runs
+    /// `verify_oath`, and rewrites the final reply per the configured
+    /// strictness. `None` = Phase 1 default (no gating).
+    witness: Option<Arc<temm1e_witness::Witness>>,
+    /// Strictness for the Witness gate. Only consulted when `witness` is Some.
+    witness_strictness: temm1e_witness::config::WitnessStrictness,
+    /// Whether to append the per-task Witness readout to the final reply.
+    witness_show_readout: bool,
 }
 
 impl AgentRuntime {
@@ -214,7 +223,34 @@ impl AgentRuntime {
             social_evaluating: Arc::new(AtomicBool::new(false)),
             eigen_tune: None,
             eigen_tune_local_routing: false,
+            witness: None,
+            witness_strictness: temm1e_witness::config::WitnessStrictness::Observe,
+            witness_show_readout: false,
         }
+    }
+
+    /// Attach a Witness verification layer to this runtime.
+    ///
+    /// The Witness will be consulted after the agent decides it is done,
+    /// before the final reply is returned. If the Witness has a sealed
+    /// Oath for the current session, it runs `verify_oath()` and rewrites
+    /// `reply_text` per `strictness`. If no Oath is sealed for the session
+    /// (the common case in Phase 2 while the Planner Oath generation is
+    /// being built out), the gate is a no-op.
+    ///
+    /// Cambium trust is NOT touched from here — the caller is responsible
+    /// for wiring `Verdict` → `TrustEngine::record_verdict` downstream if
+    /// they want evidence-bound trust levels.
+    pub fn with_witness(
+        mut self,
+        witness: Arc<temm1e_witness::Witness>,
+        strictness: temm1e_witness::config::WitnessStrictness,
+        show_readout: bool,
+    ) -> Self {
+        self.witness = Some(witness);
+        self.witness_strictness = strictness;
+        self.witness_show_readout = show_readout;
+        self
     }
 
     /// Create a new AgentRuntime with custom context limits.
@@ -290,6 +326,9 @@ impl AgentRuntime {
             social_evaluating: Arc::new(AtomicBool::new(false)),
             eigen_tune: None,
             eigen_tune_local_routing: false,
+            witness: None,
+            witness_strictness: temm1e_witness::config::WitnessStrictness::Observe,
+            witness_show_readout: false,
         }
     }
 
@@ -1826,6 +1865,60 @@ impl AgentRuntime {
                     let verification = done_criteria::format_verification_prompt(&_done_criteria);
                     if !verification.is_empty() {
                         reply_text.push_str(&verification);
+                    }
+                }
+
+                // ── Witness gate ─────────────────────────────────────
+                // Phase 2: if a Witness is attached AND a sealed Oath exists
+                // for this session, run the Tier 0/1 verification pipeline
+                // and rewrite reply_text per the configured strictness.
+                //
+                // Law 5 (Narrative-Only FAIL): any error in Witness lookup
+                // or verification leaves reply_text untouched — delivery is
+                // never blocked, files are never mutated. Witness only
+                // controls the narrative.
+                if let Some(ref witness) = self.witness {
+                    match witness.active_oath(&session.session_id).await {
+                        Ok(Some(oath)) => match witness.verify_oath(&oath).await {
+                            Ok(verdict) => {
+                                tracing::info!(
+                                    session_id = %session.session_id,
+                                    outcome = ?verdict.outcome,
+                                    pass = verdict.pass_count(),
+                                    fail = verdict.fail_count(),
+                                    inconclusive = verdict.inconclusive_count(),
+                                    cost_usd = verdict.cost_usd,
+                                    latency_ms = verdict.latency_ms,
+                                    "witness verdict rendered"
+                                );
+                                reply_text = witness.compose_final_reply_ex(
+                                    &reply_text,
+                                    &verdict,
+                                    self.witness_strictness,
+                                    self.witness_show_readout,
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    session_id = %session.session_id,
+                                    error = %e,
+                                    "witness verification error; reply unchanged (Law 5)"
+                                );
+                            }
+                        },
+                        Ok(None) => {
+                            tracing::debug!(
+                                session_id = %session.session_id,
+                                "witness has no active oath for this session; skipping gate"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %session.session_id,
+                                error = %e,
+                                "witness active_oath lookup failed; reply unchanged (Law 5)"
+                            );
+                        }
                     }
                 }
 

@@ -39,6 +39,7 @@ pub mod config;
 pub mod error;
 pub mod ledger;
 pub mod oath;
+pub mod planner;
 pub mod predicate_sets;
 pub mod predicates;
 pub mod types;
