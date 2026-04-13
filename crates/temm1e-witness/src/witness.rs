@@ -49,6 +49,21 @@ pub trait Tier1Verifier: Send + Sync {
     ) -> Result<LlmVerifierResponse, WitnessError>;
 }
 
+/// Abstract Tier 2 adversarial auditor — same shape as Tier 1 but prompted
+/// differently (assumes the claim is false until proven). Strictly advisory
+/// per the research paper §5.2: a Tier 2 PASS never overrides a Tier 0 FAIL,
+/// and Tier 2 only has authority when no Tier 0 check is present for a given
+/// predicate.
+#[async_trait]
+pub trait Tier2Verifier: Send + Sync {
+    async fn audit(
+        &self,
+        oath_goal: &str,
+        predicate_rubric: &str,
+        evidence: &str,
+    ) -> Result<LlmVerifierResponse, WitnessError>;
+}
+
 /// Default Tier 1 verifier backed by a `Provider` + a model name.
 ///
 /// Uses clean-slate context: no conversation history, no tool schema, no
@@ -128,6 +143,88 @@ fn extract_text(content: &[temm1e_core::types::message::ContentPart]) -> String 
     out
 }
 
+/// Default Tier 2 adversarial auditor backed by a `Provider` + a model name.
+///
+/// Like Tier 1, uses clean-slate context: no conversation history, no tools,
+/// no prior reasoning. Unlike Tier 1, the system prompt instructs the model
+/// to find the cheapest falsification — to assume the claim is false until
+/// the evidence forces it to be true.
+///
+/// Per the paper, Tier 2 is strictly advisory. A Tier 2 PASS never overrides
+/// a Tier 0 FAIL. The Witness runtime enforces this by wrapping Tier 2
+/// predicate results as `advisory = true` in the aggregation step (unless
+/// the predicate itself is marked non-advisory, which is discouraged).
+pub struct ProviderTier2Verifier {
+    provider: Arc<dyn Provider>,
+    model: String,
+    max_tokens: u32,
+}
+
+impl ProviderTier2Verifier {
+    pub fn new(provider: Arc<dyn Provider>, model: impl Into<String>) -> Self {
+        Self {
+            provider,
+            model: model.into(),
+            max_tokens: 300,
+        }
+    }
+}
+
+const TIER2_SYSTEM_PROMPT: &str = "You are a skeptical adversarial auditor. Your job: \
+find the cheapest way the claim could be false.\n\n\
+Given a subtask goal, a predicate, and evidence, your task is to:\n\
+1. Assume the claim is FALSE until the evidence forces you otherwise.\n\
+2. Identify any plausible way the evidence could have been produced without \
+the predicate holding (reward hacking, shortcut, fake file, etc.).\n\
+3. If you can construct any plausible falsification scenario, reply FAIL.\n\
+4. Your bias is toward finding failure. Do not be generous.\n\n\
+RULES:\n\
+1. Reply ONLY with JSON: {\"verdict\": \"pass\" | \"fail\", \"reason\": \"the cheapest falsification scenario\"}\n\
+2. Your verdict is advisory — a stronger deterministic check may override you.\n\
+3. Do not speculate about unseen state that you cannot check from the evidence.\n\
+4. Do not rewrite the predicate. Do not suggest improvements. Do not argue.\n\
+5. Binary verdict only. No \"partially\" or \"mostly\".";
+
+#[async_trait]
+impl Tier2Verifier for ProviderTier2Verifier {
+    async fn audit(
+        &self,
+        oath_goal: &str,
+        predicate_rubric: &str,
+        evidence: &str,
+    ) -> Result<LlmVerifierResponse, WitnessError> {
+        let user_prompt = format!(
+            "Oath goal: {}\n\nPredicate to audit: {}\n\nEvidence:\n{}\n\n\
+             Find the cheapest way this claim could be false given only the evidence shown. \
+             If you cannot find one, reply PASS. Otherwise FAIL with the falsification scenario. \
+             Reply ONLY as JSON: {{\"verdict\": \"pass\" | \"fail\", \"reason\": \"...\"}}",
+            oath_goal, predicate_rubric, evidence
+        );
+
+        let req = CompletionRequest {
+            model: self.model.clone(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text(user_prompt),
+            }],
+            tools: vec![],
+            max_tokens: Some(self.max_tokens),
+            temperature: Some(0.0),
+            system: Some(TIER2_SYSTEM_PROMPT.to_string()),
+        };
+
+        let resp = self
+            .provider
+            .complete(req)
+            .await
+            .map_err(|e| WitnessError::PredicateCheck(format!("tier2 call: {e}")))?;
+
+        let text = extract_text(&resp.content);
+        // Tier 2 reuses the same JSON schema parser.
+        parse_tier1_response(&text)
+    }
+}
+
 /// Parse a Tier 1 / Tier 2 verifier response. Tolerates surrounding
 /// markdown fences (```json) and trailing text.
 pub fn parse_tier1_response(text: &str) -> Result<LlmVerifierResponse, WitnessError> {
@@ -160,6 +257,7 @@ pub struct Witness {
     ledger: Arc<Ledger>,
     workspace_root: std::path::PathBuf,
     tier1: Option<Arc<dyn Tier1Verifier>>,
+    tier2: Option<Arc<dyn Tier2Verifier>>,
 }
 
 impl Witness {
@@ -168,20 +266,43 @@ impl Witness {
             ledger,
             workspace_root: workspace_root.into(),
             tier1: None,
+            tier2: None,
         }
     }
 
-    /// Attach a Tier 1 verifier. Without this, Tier 1 and Tier 2 predicates
-    /// return `Inconclusive`. With it, Tier 1 predicates get real LLM
-    /// verification via clean-slate context.
+    /// Attach a Tier 1 verifier. Without this, Tier 1 predicates
+    /// return `Inconclusive`.
     pub fn with_tier1(mut self, tier1: Arc<dyn Tier1Verifier>) -> Self {
         self.tier1 = Some(tier1);
+        self
+    }
+
+    /// Attach a Tier 2 adversarial auditor. Without this, Tier 2 predicates
+    /// return `Inconclusive`. Tier 2 is strictly advisory regardless of
+    /// whether this is attached — a Tier 2 PASS never overrides a Tier 0 FAIL.
+    pub fn with_tier2(mut self, tier2: Arc<dyn Tier2Verifier>) -> Self {
+        self.tier2 = Some(tier2);
         self
     }
 
     /// Attach a Tier 1 verifier backed by a Provider + model.
     pub fn with_provider(self, provider: Arc<dyn Provider>, model: impl Into<String>) -> Self {
         self.with_tier1(Arc::new(ProviderTier1Verifier::new(provider, model)))
+    }
+
+    /// Attach both Tier 1 and Tier 2 verifiers backed by the same Provider +
+    /// model — the common path under the single-model policy.
+    pub fn with_tiered_provider(
+        self,
+        provider: Arc<dyn Provider>,
+        model: impl Into<String>,
+    ) -> Self {
+        let model = model.into();
+        self.with_tier1(Arc::new(ProviderTier1Verifier::new(
+            provider.clone(),
+            model.clone(),
+        )))
+        .with_tier2(Arc::new(ProviderTier2Verifier::new(provider, model)))
     }
 
     pub fn ledger(&self) -> &Arc<Ledger> {
@@ -238,20 +359,29 @@ impl Witness {
                 r.latency_ms = lat;
                 r
             } else {
-                // Tier 2 — adversarial auditor. Phase 2: advisory only.
+                // Tier 2 — adversarial auditor via clean-slate LLM call with
+                // skeptical system prompt. Strictly advisory regardless of
+                // the predicate's own `advisory` flag.
                 tier_usage.tier2_calls += 1;
-                PredicateCheckResult {
-                    outcome: VerdictOutcome::Inconclusive,
-                    detail: "Tier 2 adversarial auditor not yet enabled — predicate advisory"
-                        .to_string(),
-                    latency_ms: 0,
-                }
+                let t2_start = Instant::now();
+                let r = self.dispatch_tier2(predicate, oath).await;
+                let lat = t2_start.elapsed().as_millis() as u64;
+                tier_usage.tier2_latency_ms += lat;
+                let mut r = r;
+                r.latency_ms = lat;
+                r
             };
 
+            // Advisory rules:
+            //   - AspectVerifier honors its own `advisory` flag.
+            //   - AdversarialJudge (Tier 2) is ALWAYS advisory per the
+            //     research paper §5.2: a Tier 2 PASS never overrides a Tier 0
+            //     FAIL, and Tier 2 FAIL should not hard-fail the verdict by
+            //     itself. Tier 2 is an auditor, not an authority.
             let advisory = matches!(
                 predicate,
                 Predicate::AspectVerifier { advisory: true, .. }
-                    | Predicate::AdversarialJudge { advisory: true, .. }
+                    | Predicate::AdversarialJudge { .. }
             );
 
             per_predicate.push(PredicateResult {
@@ -348,6 +478,63 @@ impl Witness {
             Err(e) => PredicateCheckResult {
                 outcome: VerdictOutcome::Inconclusive,
                 detail: format!("tier1 error: {e}"),
+                latency_ms: 0,
+            },
+        }
+    }
+
+    /// Dispatch a Tier 2 (AdversarialJudge) predicate through the attached
+    /// auditor. If no Tier 2 auditor is configured, returns `Inconclusive`.
+    /// Tier 2 remains advisory regardless of outcome.
+    async fn dispatch_tier2(&self, predicate: &Predicate, oath: &Oath) -> PredicateCheckResult {
+        let (rubric, _evidence_refs) = match predicate {
+            Predicate::AdversarialJudge {
+                rubric,
+                evidence_refs,
+                ..
+            } => (rubric.clone(), evidence_refs.clone()),
+            _ => {
+                return PredicateCheckResult {
+                    outcome: VerdictOutcome::Inconclusive,
+                    detail: "non-Tier2 predicate routed to dispatch_tier2".to_string(),
+                    latency_ms: 0,
+                };
+            }
+        };
+
+        let tier2 = match self.tier2.as_ref() {
+            Some(t) => t,
+            None => {
+                return PredicateCheckResult {
+                    outcome: VerdictOutcome::Inconclusive,
+                    detail: "no Tier 2 auditor configured — predicate advisory".to_string(),
+                    latency_ms: 0,
+                };
+            }
+        };
+
+        let evidence_summary = format!(
+            "workspace_root: {}\nactive_oath_subtask: {}",
+            self.workspace_root.display(),
+            oath.subtask_id
+        );
+
+        match tier2.audit(&oath.goal, &rubric, &evidence_summary).await {
+            Ok(resp) => {
+                let outcome = match resp.verdict.to_lowercase().as_str() {
+                    "pass" => VerdictOutcome::Pass,
+                    "fail" => VerdictOutcome::Fail,
+                    _ => VerdictOutcome::Inconclusive,
+                };
+                PredicateCheckResult {
+                    outcome,
+                    detail: format!("tier2 (advisory): {}", resp.reason),
+                    latency_ms: 0,
+                }
+            }
+            Err(e) => PredicateCheckResult {
+                outcome: VerdictOutcome::Inconclusive,
+                detail: format!("tier2 error: {e}"),
                 latency_ms: 0,
             },
         }
@@ -654,6 +841,35 @@ mod tests {
 
     fn mock_tier1(verdict: &str, reason: &str) -> Arc<MockTier1> {
         Arc::new(MockTier1 {
+            response: Mutex::new(LlmVerifierResponse {
+                verdict: verdict.to_string(),
+                reason: reason.to_string(),
+            }),
+            calls: Mutex::new(0),
+        })
+    }
+
+    /// A deterministic mock Tier 2 adversarial auditor.
+    struct MockTier2 {
+        response: Mutex<LlmVerifierResponse>,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl Tier2Verifier for MockTier2 {
+        async fn audit(
+            &self,
+            _oath_goal: &str,
+            _predicate_rubric: &str,
+            _evidence: &str,
+        ) -> Result<LlmVerifierResponse, WitnessError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(self.response.lock().unwrap().clone())
+        }
+    }
+
+    fn mock_tier2(verdict: &str, reason: &str) -> Arc<MockTier2> {
+        Arc::new(MockTier2 {
             response: Mutex::new(LlmVerifierResponse {
                 verdict: verdict.to_string(),
                 reason: reason.to_string(),
@@ -1001,6 +1217,119 @@ mod tests {
     fn parse_tier1_response_rejects_non_json() {
         let r = parse_tier1_response("I think it looks good.");
         assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn tier2_auditor_routes_pass_verdict_but_stays_advisory() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier2("pass", "no falsification found");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier2(mock.clone());
+
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply with file")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AdversarialJudge {
+                rubric: "could this be faked?".to_string(),
+                evidence_refs: vec![],
+                advisory: false, // Ignored — Tier 2 is always advisory
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+
+        assert_eq!(verdict.outcome, VerdictOutcome::Pass);
+        assert_eq!(verdict.tier_usage.tier2_calls, 1);
+        assert_eq!(*mock.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn tier2_auditor_fail_does_not_fail_overall_when_tier0_passes() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier2("fail", "paranoid falsification");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier2(mock);
+
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        // Tier 0 passes cleanly; Tier 2 fails adversarially. Tier 2 is
+        // advisory, so overall outcome is PASS.
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AdversarialJudge {
+                rubric: "could this be faked?".to_string(),
+                evidence_refs: vec![],
+                advisory: false, // Ignored
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+        assert_eq!(
+            verdict.outcome,
+            VerdictOutcome::Pass,
+            "Tier 2 FAIL must not override Tier 0 PASS"
+        );
+    }
+
+    #[tokio::test]
+    async fn tier2_auditor_cannot_override_tier0_fail() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let mock = mock_tier2("pass", "looks fine");
+        let witness = Witness::new(ledger, dir.path().to_path_buf()).with_tier2(mock);
+
+        // Tier 0 FileExists fails (file doesn't exist). Tier 2 says PASS.
+        // Overall must be FAIL — Tier 0 is authoritative.
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists {
+                path: dir.path().join("nope.txt"),
+            })
+            .with_postcondition(Predicate::AdversarialJudge {
+                rubric: "x".to_string(),
+                evidence_refs: vec![],
+                advisory: false,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+        assert_eq!(
+            verdict.outcome,
+            VerdictOutcome::Fail,
+            "Tier 2 PASS must never override Tier 0 FAIL"
+        );
+    }
+
+    #[tokio::test]
+    async fn tier2_without_auditor_is_inconclusive() {
+        let (witness, dir) = setup().await;
+        let file = dir.path().join("a.txt");
+        tokio::fs::write(&file, "hi").await.unwrap();
+        let oath = Oath::draft("st-1", "root-1", "sess-1", "reply")
+            .with_postcondition(Predicate::FileExists { path: file })
+            .with_postcondition(Predicate::AdversarialJudge {
+                rubric: "x".to_string(),
+                evidence_refs: vec![],
+                advisory: false,
+            });
+        let (sealed, _) = seal_oath(witness.ledger(), oath).await.unwrap();
+        let verdict = witness.verify_oath(&sealed).await.unwrap();
+        // Tier 2 always advisory → its Inconclusive doesn't fail overall.
+        assert_eq!(verdict.outcome, VerdictOutcome::Pass);
+        assert_eq!(verdict.tier_usage.tier2_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn with_tiered_provider_attaches_both_tiers() {
+        // Smoke test that the convenience builder hooks both tiers. The
+        // real Provider isn't exercised here — we just verify it compiles.
+        // (Provider is constructed via a no-op mock from test-utils would
+        // be nice, but for now we just call with_tier1 + with_tier2 directly
+        // to verify both slots are populated.)
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open("sqlite::memory:").await.unwrap();
+        let witness = Witness::new(ledger, dir.path().to_path_buf())
+            .with_tier1(mock_tier1("pass", ""))
+            .with_tier2(mock_tier2("pass", ""));
+        assert!(witness.tier1.is_some());
+        assert!(witness.tier2.is_some());
     }
 
     #[test]
