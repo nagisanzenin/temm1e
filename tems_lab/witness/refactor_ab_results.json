@@ -1,0 +1,145 @@
+{
+  "model": "gemini-3-flash-preview",
+  "budget_ceiling_usd": 5.0,
+  "tasks_attempted": 3,
+  "tasks_completed": 3,
+  "aborted_due_to_budget": false,
+  "cumulative_cost_usd": 0.040366349999999995,
+  "per_task": [
+    {
+      "task": "rename_helper_in_predicates",
+      "arm_a": {
+        "arm": "A",
+        "final_reply": "",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 48053,
+        "file_size_delta": 0,
+        "witness_outcome": "Fail",
+        "witness_pass": 1,
+        "witness_fail": 5,
+        "witness_inconclusive": 0,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 13625,
+        "witness_rewrote_reply": false,
+        "error": "agent error: Provider error: Gemini API error (500 Internal Server Error): {\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Internal error encountered.\",\n    \"status\": \"INTERNAL\"\n  }\n}\n"
+      },
+      "arm_b": {
+        "arm": "B",
+        "final_reply": "⚠ **Partial completion.**\n\nWitness verified 5/6 postconditions:\n\n✓ Verified:\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs\n  • anti-pattern `\\bresolve\\(` not found in any of 1 files (predicate passes)\n  • anti-pattern `fn\\s+resolve\\b` not found in any of 1 files (predicate passes)\n  • pattern `fn\\s+resolve_workspace_path` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs\n  • found 7 matches for `resolve_workspace_path` (needed 5)\n\n✗ Could not verify:\n  • anti-pattern `todo!\\(|unimplemented!\\(` FOUND in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs (predicate fails)\n\nThis work is incomplete according to the pre-committed contract. Files produced during this task have NOT been modified or rolled back — they remain in place for your review.\n\n─── Witness: 5/6 PASS (1 FAIL). Cost: $0.0000. Latency: +3ms. Tiers: T0×6. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 37314,
+        "file_size_delta": -10739,
+        "witness_outcome": "Fail",
+        "witness_pass": 5,
+        "witness_fail": 1,
+        "witness_inconclusive": 0,
+        "api_calls": 11,
+        "input_tokens": 76170,
+        "output_tokens": 24853,
+        "cost_usd": 0.026337299999999998,
+        "latency_ms": 160884,
+        "witness_rewrote_reply": true,
+        "error": null
+      },
+      "cost_overhead_usd": 0.026337299999999998,
+      "latency_overhead_ms": 147259
+    },
+    {
+      "task": "add_doc_to_predicate_checkers",
+      "arm_a": {
+        "arm": "A",
+        "final_reply": "",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 48053,
+        "file_size_delta": 0,
+        "witness_outcome": "Fail",
+        "witness_pass": 2,
+        "witness_fail": 2,
+        "witness_inconclusive": 0,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 360005,
+        "witness_rewrote_reply": false,
+        "error": "timeout"
+      },
+      "arm_b": {
+        "arm": "B",
+        "final_reply": "",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 48053,
+        "file_size_delta": 0,
+        "witness_outcome": "Fail",
+        "witness_pass": 2,
+        "witness_fail": 2,
+        "witness_inconclusive": 0,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 185198,
+        "witness_rewrote_reply": false,
+        "error": "timeout"
+      },
+      "cost_overhead_usd": 0.0,
+      "latency_overhead_ms": -174807
+    },
+    {
+      "task": "add_check_predicate_dispatch_wrapper",
+      "arm_a": {
+        "arm": "A",
+        "final_reply": "",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 48053,
+        "file_size_delta": 0,
+        "witness_outcome": "seal_error:lenient oath: code-producing task must include a wiring check (GrepCountAtLeast n>=2)",
+        "witness_pass": 0,
+        "witness_fail": 0,
+        "witness_inconclusive": 0,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 10362,
+        "witness_rewrote_reply": false,
+        "error": "agent error: Provider error: Gemini API error (500 Internal Server Error): {\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Internal error encountered.\",\n    \"status\": \"INTERNAL\"\n  }\n}\n"
+      },
+      "arm_b": {
+        "arm": "B",
+        "final_reply": "done\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "files_present": [
+          "src/predicates.rs"
+        ],
+        "file_size_after": 28190,
+        "file_size_delta": -19863,
+        "witness_outcome": "no_active_oath",
+        "witness_pass": 0,
+        "witness_fail": 0,
+        "witness_inconclusive": 0,
+        "api_calls": 9,
+        "input_tokens": 61155,
+        "output_tokens": 8093,
+        "cost_usd": 0.014029049999999998,
+        "latency_ms": 56935,
+        "witness_rewrote_reply": false,
+        "error": null
+      },
+      "cost_overhead_usd": 0.014029049999999998,
+      "latency_overhead_ms": 46573
+    }
+  ]
+}
