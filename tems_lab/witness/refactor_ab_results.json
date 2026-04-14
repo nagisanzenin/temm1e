@@ -1,10 +1,10 @@
 {
-  "model": "gemini-3-flash-preview",
+  "model": "gpt-5.4",
   "budget_ceiling_usd": 5.0,
   "tasks_attempted": 3,
   "tasks_completed": 3,
   "aborted_due_to_budget": false,
-  "cumulative_cost_usd": 0.040366349999999995,
+  "cumulative_cost_usd": 0.0,
   "per_task": [
     {
       "task": "rename_helper_in_predicates",
@@ -24,32 +24,32 @@
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
-        "latency_ms": 13625,
+        "latency_ms": 1955,
         "witness_rewrote_reply": false,
-        "error": "agent error: Provider error: Gemini API error (500 Internal Server Error): {\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Internal error encountered.\",\n    \"status\": \"INTERNAL\"\n  }\n}\n"
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
       "arm_b": {
         "arm": "B",
-        "final_reply": "⚠ **Partial completion.**\n\nWitness verified 5/6 postconditions:\n\n✓ Verified:\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs\n  • anti-pattern `\\bresolve\\(` not found in any of 1 files (predicate passes)\n  • anti-pattern `fn\\s+resolve\\b` not found in any of 1 files (predicate passes)\n  • pattern `fn\\s+resolve_workspace_path` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs\n  • found 7 matches for `resolve_workspace_path` (needed 5)\n\n✗ Could not verify:\n  • anti-pattern `todo!\\(|unimplemented!\\(` FOUND in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmpMdi1jX/src/predicates.rs (predicate fails)\n\nThis work is incomplete according to the pre-committed contract. Files produced during this task have NOT been modified or rolled back — they remain in place for your review.\n\n─── Witness: 5/6 PASS (1 FAIL). Cost: $0.0000. Latency: +3ms. Tiers: T0×6. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "final_reply": "",
         "files_present": [
           "src/predicates.rs"
         ],
-        "file_size_after": 37314,
-        "file_size_delta": -10739,
+        "file_size_after": 48053,
+        "file_size_delta": 0,
         "witness_outcome": "Fail",
-        "witness_pass": 5,
-        "witness_fail": 1,
+        "witness_pass": 1,
+        "witness_fail": 5,
         "witness_inconclusive": 0,
-        "api_calls": 11,
-        "input_tokens": 76170,
-        "output_tokens": 24853,
-        "cost_usd": 0.026337299999999998,
-        "latency_ms": 160884,
-        "witness_rewrote_reply": true,
-        "error": null
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 813,
+        "witness_rewrote_reply": false,
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
-      "cost_overhead_usd": 0.026337299999999998,
-      "latency_overhead_ms": 147259
+      "cost_overhead_usd": 0.0,
+      "latency_overhead_ms": -1142
     },
     {
       "task": "add_doc_to_predicate_checkers",
@@ -69,9 +69,9 @@
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
-        "latency_ms": 360005,
+        "latency_ms": 521,
         "witness_rewrote_reply": false,
-        "error": "timeout"
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
       "arm_b": {
         "arm": "B",
@@ -89,12 +89,12 @@
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
-        "latency_ms": 185198,
+        "latency_ms": 2580,
         "witness_rewrote_reply": false,
-        "error": "timeout"
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
       "cost_overhead_usd": 0.0,
-      "latency_overhead_ms": -174807
+      "latency_overhead_ms": 2059
     },
     {
       "task": "add_check_predicate_dispatch_wrapper",
@@ -114,32 +114,32 @@
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
-        "latency_ms": 10362,
+        "latency_ms": 1001,
         "witness_rewrote_reply": false,
-        "error": "agent error: Provider error: Gemini API error (500 Internal Server Error): {\n  \"error\": {\n    \"code\": 500,\n    \"message\": \"Internal error encountered.\",\n    \"status\": \"INTERNAL\"\n  }\n}\n"
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
       "arm_b": {
         "arm": "B",
-        "final_reply": "done\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "final_reply": "",
         "files_present": [
           "src/predicates.rs"
         ],
-        "file_size_after": 28190,
-        "file_size_delta": -19863,
+        "file_size_after": 48053,
+        "file_size_delta": 0,
         "witness_outcome": "no_active_oath",
         "witness_pass": 0,
         "witness_fail": 0,
         "witness_inconclusive": 0,
-        "api_calls": 9,
-        "input_tokens": 61155,
-        "output_tokens": 8093,
-        "cost_usd": 0.014029049999999998,
-        "latency_ms": 56935,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": 561,
         "witness_rewrote_reply": false,
-        "error": null
+        "error": "agent error: Rate limited: {\n    \"error\": {\n        \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.\",\n        \"type\": \"insufficient_quota\",\n        \"param\": null,\n        \"code\": \"insufficient_quota\"\n    }\n}\n"
       },
-      "cost_overhead_usd": 0.014029049999999998,
-      "latency_overhead_ms": 46573
+      "cost_overhead_usd": 0.0,
+      "latency_overhead_ms": -440
     }
   ]
 }

@@ -496,20 +496,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Refactor tasks:  {}", REFACTOR_TASKS.len());
     println!("════════════════════════════════════════════════════════════════\n");
 
+    // Auto-detect provider from model name prefix.
+    let provider_name = if model.starts_with("gemini-") {
+        "gemini"
+    } else if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
+        "openai"
+    } else if model.starts_with("claude-") {
+        "anthropic"
+    } else if model.starts_with("grok-") {
+        "grok"
+    } else {
+        "openai" // default fallback
+    };
+
     let creds = load_credentials_file().ok_or("no credentials.toml found")?;
-    let gemini_provider = creds
+    let cred_provider = creds
         .providers
         .iter()
-        .find(|p| p.name == "gemini")
-        .ok_or("no gemini provider in credentials.toml")?;
-    let api_key = gemini_provider
+        .find(|p| p.name == provider_name)
+        .ok_or_else(|| {
+            format!(
+                "no {} provider in credentials.toml — available: {:?}",
+                provider_name,
+                creds.providers.iter().map(|p| &p.name).collect::<Vec<_>>()
+            )
+        })?;
+    let api_key = cred_provider
         .keys
         .first()
         .cloned()
-        .ok_or("gemini provider has no keys")?;
+        .ok_or_else(|| format!("{} provider has no keys", provider_name))?;
 
-    let provider: Arc<dyn temm1e_core::traits::Provider> =
-        Arc::new(temm1e_providers::GeminiProvider::new(api_key));
+    let provider: Arc<dyn temm1e_core::traits::Provider> = match provider_name {
+        "gemini" => Arc::new(temm1e_providers::GeminiProvider::new(api_key)),
+        "openai" => Arc::new(
+            temm1e_providers::OpenAICompatProvider::new(api_key)
+                .with_base_url("https://api.openai.com/v1".to_string()),
+        ),
+        "anthropic" => Arc::new(temm1e_providers::AnthropicProvider::new(api_key)),
+        "grok" => Arc::new(
+            temm1e_providers::OpenAICompatProvider::new(api_key)
+                .with_base_url("https://api.x.ai/v1".to_string()),
+        ),
+        _ => Arc::new(temm1e_providers::OpenAICompatProvider::new(api_key)),
+    };
+
+    println!("  Provider:        {} ({})", provider_name, provider.name());
 
     let interrupt = Arc::new(AtomicBool::new(false));
 
