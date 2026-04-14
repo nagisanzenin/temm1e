@@ -1,145 +1,150 @@
 {
-  "model": "gpt-5.4",
-  "budget_ceiling_usd": 5.0,
+  "model": "gemini-3-flash-preview",
+  "budget_ceiling_usd": 3.0,
   "tasks_attempted": 3,
   "tasks_completed": 3,
   "aborted_due_to_budget": false,
-  "cumulative_cost_usd": 0.27485125,
+  "cumulative_cost_usd": 0.45971924999999997,
   "per_task": [
     {
-      "task": "rename_helper_in_predicates",
+      "task": "hard_cross_file_rename_check_tier0",
       "arm_a": {
         "arm": "A",
-        "final_reply": "",
+        "final_reply": "I reached the maximum number of tool execution steps. Here is what I have so far.",
         "files_present": [
-          "src/predicates.rs"
+          "src/predicates.rs",
+          "src/types.rs",
+          "src/witness.rs"
         ],
-        "file_size_after": 33066,
-        "file_size_delta": -14987,
+        "file_size_after": 34147,
+        "file_size_delta": -13906,
         "witness_outcome": "Fail",
-        "witness_pass": 5,
-        "witness_fail": 1,
+        "witness_pass": 3,
+        "witness_fail": 6,
         "witness_inconclusive": 0,
-        "api_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost_usd": 0.0,
-        "latency_ms": 360003,
-        "witness_rewrote_reply": false,
-        "error": "timeout"
-      },
-      "arm_b": {
-        "arm": "B",
-        "final_reply": "done\n\n─── Witness: 6/6 PASS. Cost: $0.0000. Latency: +3ms. Tiers: T0×6. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
-        "files_present": [
-          "src/predicates.rs"
-        ],
-        "file_size_after": 31164,
-        "file_size_delta": -16889,
-        "witness_outcome": "Pass",
-        "witness_pass": 6,
-        "witness_fail": 0,
-        "witness_inconclusive": 0,
-        "api_calls": 10,
-        "input_tokens": 45196,
-        "output_tokens": 9367,
-        "cost_usd": 0.15016499999999997,
-        "latency_ms": 292020,
+        "api_calls": 201,
+        "input_tokens": 2189969,
+        "output_tokens": 15908,
+        "cost_usd": 0.33804015,
+        "latency_ms": 640452,
         "witness_rewrote_reply": false,
         "error": null
       },
-      "cost_overhead_usd": 0.15016499999999997,
-      "latency_overhead_ms": -67983
-    },
-    {
-      "task": "add_doc_to_predicate_checkers",
-      "arm_a": {
-        "arm": "A",
-        "final_reply": "",
-        "files_present": [
-          "src/predicates.rs"
-        ],
-        "file_size_after": 48053,
-        "file_size_delta": 0,
-        "witness_outcome": "Fail",
-        "witness_pass": 2,
-        "witness_fail": 2,
-        "witness_inconclusive": 0,
-        "api_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost_usd": 0.0,
-        "latency_ms": 360006,
-        "witness_rewrote_reply": false,
-        "error": "timeout"
-      },
       "arm_b": {
         "arm": "B",
-        "final_reply": "",
+        "final_reply": "⚠ **Partial completion.**\n\nWitness verified 8/9 postconditions:\n\n✓ Verified:\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp5VyNtM/src/predicates.rs\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp5VyNtM/src/witness.rs\n  • anti-pattern `\\bcheck_tier0\\b` not found in any of 1 files (predicate passes)\n  • anti-pattern `\\bcheck_tier0\\b` not found in any of 1 files (predicate passes)\n  • pattern `pub async fn dispatch_tier0_predicate` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp5VyNtM/src/predicates.rs\n  • pattern `dispatch_tier0_predicate` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp5VyNtM/src/witness.rs\n  • found 19 matches for `dispatch_tier0_predicate` (needed 5)\n  • anti-pattern `todo!\\(|unimplemented!\\(` not found in any of 1 files (predicate passes)\n\n✗ Could not verify:\n  • anti-pattern `todo!\\(|unimplemented!\\(` FOUND in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp5VyNtM/src/predicates.rs (predicate fails)\n\nThis work is incomplete according to the pre-committed contract. Files produced during this task have NOT been modified or rolled back — they remain in place for your review.\n\n─── Witness: 8/9 PASS (1 FAIL). Cost: $0.0000. Latency: +2ms. Tiers: T0×9. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
         "files_present": [
-          "src/predicates.rs"
+          "src/predicates.rs",
+          "src/witness.rs"
         ],
-        "file_size_after": 48053,
-        "file_size_delta": 0,
+        "file_size_after": 29630,
+        "file_size_delta": -18423,
         "witness_outcome": "Fail",
-        "witness_pass": 2,
-        "witness_fail": 2,
+        "witness_pass": 8,
+        "witness_fail": 1,
         "witness_inconclusive": 0,
-        "api_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost_usd": 0.0,
-        "latency_ms": 287334,
-        "witness_rewrote_reply": false,
-        "error": "agent error: Provider error: OpenAI-compat API error (500 Internal Server Error): {\n  \"error\": {\n    \"message\": \"The server had an error while processing your request. Sorry about that!\",\n    \"type\": \"server_error\",\n    \"param\": null,\n    \"code\": null\n  }\n}"
+        "api_calls": 22,
+        "input_tokens": 154245,
+        "output_tokens": 10479,
+        "cost_usd": 0.02942415,
+        "latency_ms": 115566,
+        "witness_rewrote_reply": true,
+        "error": null
       },
-      "cost_overhead_usd": 0.0,
-      "latency_overhead_ms": -72672
+      "cost_overhead_usd": -0.308616,
+      "latency_overhead_ms": -524886
     },
     {
-      "task": "add_check_predicate_dispatch_wrapper",
+      "task": "hard_enum_variant_feature_add",
       "arm_a": {
         "arm": "A",
         "final_reply": "done\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
         "files_present": [
-          "src/predicates.rs"
+          "src/predicates.rs",
+          "src/types.rs"
         ],
-        "file_size_after": 33800,
-        "file_size_delta": -14253,
-        "witness_outcome": "seal_error:lenient oath: code-producing task must include a wiring check (GrepCountAtLeast n>=2)",
-        "witness_pass": 0,
+        "file_size_after": 32190,
+        "file_size_delta": -15863,
+        "witness_outcome": "Pass",
+        "witness_pass": 9,
         "witness_fail": 0,
         "witness_inconclusive": 0,
-        "api_calls": 7,
-        "input_tokens": 23309,
-        "output_tokens": 9555,
-        "cost_usd": 0.12468625,
-        "latency_ms": 275259,
+        "api_calls": 25,
+        "input_tokens": 185126,
+        "output_tokens": 15267,
+        "cost_usd": 0.0369291,
+        "latency_ms": 131142,
         "witness_rewrote_reply": false,
         "error": null
       },
       "arm_b": {
         "arm": "B",
-        "final_reply": "",
+        "final_reply": "⚠ **Partial completion.**\n\nWitness verified 8/9 postconditions:\n\n✓ Verified:\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/types.rs\n  • file exists: /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/predicates.rs\n  • pattern `EnvVarEquals` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/types.rs\n  • pattern `async fn check_env_var_equals` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/predicates.rs\n  • pattern `Predicate::EnvVarEquals` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/predicates.rs\n  • pattern `std::env::var` found in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/predicates.rs\n  • found 3 matches for `EnvVarEquals` (needed 2)\n  • anti-pattern `todo!\\(|unimplemented!\\(` not found in any of 1 files (predicate passes)\n\n✗ Could not verify:\n  • anti-pattern `todo!\\(|unimplemented!\\(` FOUND in /var/folders/h_/5nv6lvq55j31mpkxs8vwqyk40000gn/T/.tmp3WJmT1/src/predicates.rs (predicate fails)\n\nThis work is incomplete according to the pre-committed contract. Files produced during this task have NOT been modified or rolled back — they remain in place for your review.\n\n─── Witness: 8/9 PASS (1 FAIL). Cost: $0.0000. Latency: +2ms. Tiers: T0×9. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
         "files_present": [
-          "src/predicates.rs"
+          "src/predicates.rs",
+          "src/types.rs"
         ],
-        "file_size_after": 37560,
-        "file_size_delta": -10493,
-        "witness_outcome": "no_active_oath",
-        "witness_pass": 0,
+        "file_size_after": 46530,
+        "file_size_delta": -1523,
+        "witness_outcome": "Fail",
+        "witness_pass": 8,
+        "witness_fail": 1,
+        "witness_inconclusive": 0,
+        "api_calls": 26,
+        "input_tokens": 228780,
+        "output_tokens": 15700,
+        "cost_usd": 0.043737000000000005,
+        "latency_ms": 128697,
+        "witness_rewrote_reply": true,
+        "error": null
+      },
+      "cost_overhead_usd": 0.006807900000000006,
+      "latency_overhead_ms": -2445
+    },
+    {
+      "task": "hard_new_function_plus_unit_test",
+      "arm_a": {
+        "arm": "A",
+        "final_reply": "done\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "files_present": [
+          "src/oath.rs"
+        ],
+        "file_size_after": -1,
+        "file_size_delta": 0,
+        "witness_outcome": "Pass",
+        "witness_pass": 6,
         "witness_fail": 0,
         "witness_inconclusive": 0,
-        "api_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost_usd": 0.0,
-        "latency_ms": 360003,
+        "api_calls": 4,
+        "input_tokens": 19982,
+        "output_tokens": 3441,
+        "cost_usd": 0.0050619,
+        "latency_ms": 35888,
         "witness_rewrote_reply": false,
-        "error": "timeout"
+        "error": null
       },
-      "cost_overhead_usd": -0.12468625,
-      "latency_overhead_ms": 84744
+      "arm_b": {
+        "arm": "B",
+        "final_reply": "done\n\n─── Witness: 6/6 PASS. Cost: $0.0000. Latency: +1ms. Tiers: T0×6. ───\n\n_Saving a new blueprint for this workflow — future runs will be faster._",
+        "files_present": [
+          "src/oath.rs"
+        ],
+        "file_size_after": -1,
+        "file_size_delta": 0,
+        "witness_outcome": "Pass",
+        "witness_pass": 6,
+        "witness_fail": 0,
+        "witness_inconclusive": 0,
+        "api_calls": 5,
+        "input_tokens": 30385,
+        "output_tokens": 3282,
+        "cost_usd": 0.006526949999999999,
+        "latency_ms": 37085,
+        "witness_rewrote_reply": false,
+        "error": null
+      },
+      "cost_overhead_usd": 0.001465049999999999,
+      "latency_overhead_ms": 1197
     }
   ]
 }

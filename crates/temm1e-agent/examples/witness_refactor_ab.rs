@@ -125,6 +125,141 @@ Reply 'done' when finished."#,
             PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/predicates.rs"),
         ],
     },
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 7 — harder task classes (multi-file, additive, feature+test).
+    // Gated behind WITNESS_TASK_PREFIX=hard_ so they don't duplicate
+    // Phase 4-5 runs when not requested.
+    // ─────────────────────────────────────────────────────────────────
+    RefactorTask {
+        name: "hard_cross_file_rename_check_tier0",
+        description: "Cross-file rename: check_tier0 → dispatch_tier0_predicate across predicates.rs and witness.rs (import + multiple call sites)",
+        source_files: &["src/predicates.rs", "src/witness.rs"],
+        prompt: r#"Refactor TWO Rust files in this workspace:
+
+  • `src/predicates.rs` — defines the public async function `check_tier0` and calls it recursively from several places (including its own tests).
+  • `src/witness.rs`    — imports `check_tier0` from the predicates module and calls it inside the main verify loop.
+
+Rename the public async function `check_tier0` to `dispatch_tier0_predicate` EVERYWHERE it appears, across BOTH files. Specifically:
+
+1. In `src/predicates.rs`:
+   a. Rename the function definition from `pub async fn check_tier0(...)` to `pub async fn dispatch_tier0_predicate(...)`.
+   b. Update EVERY call site in the file (there are recursive calls and calls from tests — do not miss any).
+
+2. In `src/witness.rs`:
+   a. Update the `use crate::predicates::{check_tier0, ...};` import line so it imports `dispatch_tier0_predicate` instead.
+   b. Update EVERY call site in the file.
+
+3. Do NOT change the function signature, body, or semantics. Only the name changes.
+4. Use `file_read` to read BOTH files first, then `file_write` to overwrite each with the renamed version.
+5. Be exhaustive — the agent must update every occurrence in every file. If you leave a single old name, the refactor is broken.
+
+Reply 'done' when finished."#,
+        predicate_specs: &[
+            PredicateSpec::FileExists("src/predicates.rs"),
+            PredicateSpec::FileExists("src/witness.rs"),
+            PredicateSpec::GrepAbsent(r"\bcheck_tier0\b", "src/predicates.rs"),
+            PredicateSpec::GrepAbsent(r"\bcheck_tier0\b", "src/witness.rs"),
+            PredicateSpec::FileContains("src/predicates.rs", r"pub async fn dispatch_tier0_predicate"),
+            PredicateSpec::FileContains("src/witness.rs", r"dispatch_tier0_predicate"),
+            PredicateSpec::GrepCountAtLeast("dispatch_tier0_predicate", "src/*.rs", 5),
+            PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/predicates.rs"),
+            PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/witness.rs"),
+        ],
+    },
+    RefactorTask {
+        name: "hard_enum_variant_feature_add",
+        description: "Feature add: new Predicate::EnvVarEquals variant + Tier 0 dispatch arm + helper function across types.rs and predicates.rs",
+        source_files: &["src/types.rs", "src/predicates.rs"],
+        prompt: r#"Add a new Tier 0 predicate to the Witness system. This is a FEATURE ADD that spans TWO files:
+
+  • `src/types.rs`      — defines the `Predicate` enum with variants like `FileExists`, `FileContains`, `GrepAbsent`, etc.
+  • `src/predicates.rs` — defines `pub async fn check_tier0(...)` with a `match` over `Predicate` that dispatches each variant to its Tier 0 checker function.
+
+You must make THREE additive changes:
+
+1. In `src/types.rs`, add a new variant to the `Predicate` enum:
+
+   ```rust
+   EnvVarEquals {
+       name: String,
+       expected: String,
+   },
+   ```
+
+   Place it adjacent to the other Tier 0 variants (not among the `AspectVerifier` / `AdversarialJudge` variants).
+
+2. In `src/predicates.rs`, add a new private helper function with this exact signature:
+
+   ```rust
+   async fn check_env_var_equals(
+       name: &str,
+       expected: &str,
+   ) -> Result<PredicateCheckResult, WitnessError>
+   ```
+
+   Its implementation MUST read the environment variable via `std::env::var(name)` and return a Pass PredicateCheckResult if the value equals `expected`, or a Fail result otherwise. Do NOT stub it — implement it fully. Look at how `check_file_exists` or `check_grep_present` build their `PredicateCheckResult` for reference.
+
+3. In `src/predicates.rs`, add a new match arm inside `pub async fn check_tier0(...)` that handles `Predicate::EnvVarEquals { name, expected } => check_env_var_equals(name, expected).await`. Place it with the other Tier 0 variants, not with Tier 1/2 ones.
+
+Do NOT remove or modify any existing variants, functions, or match arms. Do NOT add `todo!()`, `unimplemented!()`, or placeholder markers anywhere. Use `file_read` on BOTH files first, then `file_write` to persist each.
+
+Reply 'done' when finished."#,
+        predicate_specs: &[
+            PredicateSpec::FileExists("src/types.rs"),
+            PredicateSpec::FileExists("src/predicates.rs"),
+            PredicateSpec::FileContains("src/types.rs", r"EnvVarEquals"),
+            PredicateSpec::FileContains("src/predicates.rs", r"async fn check_env_var_equals"),
+            PredicateSpec::FileContains("src/predicates.rs", r"Predicate::EnvVarEquals"),
+            PredicateSpec::FileContains("src/predicates.rs", r"std::env::var"),
+            PredicateSpec::GrepCountAtLeast("EnvVarEquals", "src/*.rs", 2),
+            PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/types.rs"),
+            PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/predicates.rs"),
+        ],
+    },
+    RefactorTask {
+        name: "hard_new_function_plus_unit_test",
+        description: "Feature add with test: new oath_hash_prefix helper function wired into a fresh unit test in the same file",
+        source_files: &["src/oath.rs"],
+        prompt: r#"Add a new feature to `src/oath.rs` in this workspace. This is a TWO-PART task — you must do BOTH parts.
+
+Part 1 — Add a new public function:
+
+```rust
+pub fn oath_hash_prefix(oath: &Oath, prefix_len: usize) -> String {
+    // Return the first `prefix_len` characters of `oath.sealed_hash`.
+    // If the sealed_hash is shorter than prefix_len, return the full hash.
+    // If prefix_len is 0, return an empty string.
+}
+```
+
+Place it at module scope (not inside any existing fn or mod). Implement the body fully — it must read `oath.sealed_hash` and return a prefix substring. Do NOT stub it. Do NOT use `todo!()` or `unimplemented!()`.
+
+Part 2 — Add a NEW unit test inside the existing `#[cfg(test)] mod tests` block at the bottom of the file (do not create a new test module, reuse the existing one):
+
+```rust
+#[test]
+fn test_oath_hash_prefix_returns_requested_length() {
+    // 1. Build an Oath via Oath::draft(...) with some subtask_id/root_goal_id/session_id/goal.
+    // 2. Manually set `oath.sealed_hash = "abcdef0123456789".to_string();` or similar 16-char hex.
+    // 3. Assert that oath_hash_prefix(&oath, 8) returns "abcdef01" (or whatever the first 8 chars are).
+    // 4. Assert that oath_hash_prefix(&oath, 0) returns an empty string.
+}
+```
+
+The test MUST actually call `oath_hash_prefix` and make real assertions about the returned value. Do not write a placeholder test.
+
+Use `file_read` to read the existing file first, then `file_write` to overwrite it with both additions. Do NOT remove or modify any existing functions, tests, or imports.
+
+Reply 'done' when finished."#,
+        predicate_specs: &[
+            PredicateSpec::FileExists("src/oath.rs"),
+            PredicateSpec::FileContains("src/oath.rs", r"pub fn oath_hash_prefix"),
+            PredicateSpec::FileContains("src/oath.rs", r"sealed_hash"),
+            PredicateSpec::FileContains("src/oath.rs", r"fn test_oath_hash_prefix"),
+            PredicateSpec::GrepCountAtLeast("oath_hash_prefix", "src/oath.rs", 2),
+            PredicateSpec::GrepAbsent(r"todo!\(|unimplemented!\(", "src/oath.rs"),
+        ],
+    },
 ];
 
 fn host_source_root() -> PathBuf {
@@ -314,8 +449,19 @@ async fn run_one_arm(
     interrupt: Arc<AtomicBool>,
     initial_size: i64,
 ) -> ArmResult {
+    // Reasoning models on large cross-file refactors can legitimately spend
+    // 5-15 minutes thinking + writing. 180s was the Phase 4 default but
+    // strangled Phase 5 (doc-comment refactor) and Phase 7 (cross-file
+    // rename) on capability-ceiling tasks. 900s (15 min) gives real headroom.
+    // Overridable via WITNESS_AB_ATTEMPT_TIMEOUT_SECS env var.
+    let per_attempt_timeout_secs: u64 = std::env::var("WITNESS_AB_ATTEMPT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(900);
+    // Only retry on 5xx (transient provider errors). Retrying a 15-min
+    // timeout is just burning budget — if the model couldn't finish in
+    // 15 minutes, a second 15-min attempt won't help. 5xx retry stays.
     const MAX_RETRIES: u32 = 1;
-    const PER_ATTEMPT_TIMEOUT_SECS: u64 = 180;
 
     let session_id = format!("refactor-{}-{}", task.name, arm_name);
     let inbound = make_inbound(task.prompt);
@@ -329,7 +475,7 @@ async fn run_one_arm(
         let mut session = make_session_for(&workspace, &session_id);
         let started = Instant::now();
         let result = tokio::time::timeout(
-            Duration::from_secs(PER_ATTEMPT_TIMEOUT_SECS),
+            Duration::from_secs(per_attempt_timeout_secs),
             runtime.process_message(
                 &inbound,
                 &mut session,
@@ -372,16 +518,16 @@ async fn run_one_arm(
                 break;
             }
             Err(_) => {
-                last_error = Some("timeout".to_string());
-                if attempt < MAX_RETRIES {
-                    eprintln!(
-                        "    [retry] {} arm {} attempt {} timed out; retrying",
-                        task.name,
-                        arm_name,
-                        attempt + 1
-                    );
-                    continue;
-                }
+                // Wall-clock timeout. Don't retry — that just burns budget
+                // on a task the model couldn't finish in `per_attempt_timeout_secs`.
+                last_error = Some(format!(
+                    "timeout after {}s (WITNESS_AB_ATTEMPT_TIMEOUT_SECS)",
+                    per_attempt_timeout_secs
+                ));
+                eprintln!(
+                    "    [timeout] {} arm {} exceeded {}s wall-clock; not retrying",
+                    task.name, arm_name, per_attempt_timeout_secs
+                );
                 break;
             }
         }
@@ -559,7 +705,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tasks_completed: usize = 0;
     let mut aborted = false;
 
-    for task in REFACTOR_TASKS {
+    // Phase 7 task filter: if WITNESS_TASK_PREFIX is set, only run tasks
+    // whose name starts with that prefix. Example:
+    //   WITNESS_TASK_PREFIX=hard_ cargo run ... --example witness_refactor_ab
+    // runs only the three Phase 7 harder task classes and skips Phase 4-5.
+    let task_prefix = std::env::var("WITNESS_TASK_PREFIX").unwrap_or_default();
+    let selected_tasks: Vec<&RefactorTask> = if task_prefix.is_empty() {
+        REFACTOR_TASKS.iter().collect()
+    } else {
+        REFACTOR_TASKS
+            .iter()
+            .filter(|t| t.name.starts_with(&task_prefix))
+            .collect()
+    };
+    if !task_prefix.is_empty() {
+        println!(
+            "  Task filter:     WITNESS_TASK_PREFIX={} ({} of {} tasks selected)",
+            task_prefix,
+            selected_tasks.len(),
+            REFACTOR_TASKS.len()
+        );
+    }
+
+    for task in &selected_tasks {
         if cumulative_cost >= budget_ceiling {
             eprintln!(
                 "⚠ Budget ceiling ${:.2} reached, aborting after {} tasks",
@@ -572,7 +740,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "→ Running task {}/{}: {}",
             tasks_attempted,
-            REFACTOR_TASKS.len(),
+            selected_tasks.len(),
             task.name
         );
 
