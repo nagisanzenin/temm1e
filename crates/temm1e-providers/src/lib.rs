@@ -8,6 +8,8 @@
 //! - **MiniMax** (via OpenAI-compatible endpoint)
 //! - **Google Gemini** (via OpenAI-compatible endpoint)
 //! - **Z.ai / Zhipu AI** (GLM models via OpenAI-compatible endpoint)
+//! - **LM Studio** (local inference; OpenAI-compatible endpoint with
+//!   localhost:1234 default — see the `lmstudio` provider name alias)
 
 #![allow(dead_code)]
 
@@ -123,6 +125,24 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn Provider>, Tem
                 .with_extra_headers(config.extra_headers.clone());
             Ok(Box::new(provider))
         }
+        "lmstudio" | "lm-studio" => {
+            // LM Studio name alias — routes to the OpenAI-compatible adapter
+            // (LM Studio's `/v1/chat/completions` endpoint), defaulting
+            // base_url to the standard local server. The native `/api/v1/chat`
+            // endpoint is intentionally NOT used: it requires server-side
+            // state and MCP-only tool calling, both incompatible with Tem's
+            // local agent loop. See issue #45 for the full architectural
+            // analysis.
+            let base_url = config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:1234/v1".to_string());
+            let provider = OpenAICompatProvider::new(api_key)
+                .with_keys(all_keys)
+                .with_base_url(base_url)
+                .with_extra_headers(config.extra_headers.clone());
+            Ok(Box::new(provider))
+        }
         _ => {
             let mut provider = OpenAICompatProvider::new(api_key)
                 .with_keys(all_keys)
@@ -208,6 +228,18 @@ mod tests {
     #[test]
     fn create_ollama_provider() {
         let provider = create_provider(&config_with_name("ollama")).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_lmstudio_provider() {
+        let provider = create_provider(&config_with_name("lmstudio")).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_lmstudio_provider_dashed_alias() {
+        let provider = create_provider(&config_with_name("lm-studio")).unwrap();
         assert_eq!(provider.name(), "openai-compatible");
     }
 

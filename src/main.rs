@@ -515,6 +515,7 @@ fn build_system_prompt(personality: &temm1e_anima::personality::PersonalityConfi
     prompt.push_str("- zai (zhipu): glm-4.7-flash, glm-4.7, glm-5, glm-5-code, glm-4.6v\n");
     prompt.push_str("- minimax: MiniMax-M2.5\n");
     prompt.push_str("- stepfun: step-3.5-flash, step-3\n");
+    prompt.push_str("- lmstudio: local models via http://localhost:1234/v1 — register your downloaded model with /addmodel (e.g. qwen3.5-7b-instruct, llama-3.3-70b-instruct)\n");
     prompt.push_str("- openai-codex: gpt-5.4 (recommended), gpt-5.3-codex, gpt-5.2-codex (OAuth subscription)\n");
 
     // ── Vision capability ──────────────────────────────────────
@@ -8682,6 +8683,7 @@ mod tests {
         assert_eq!(default_model("minimax"), "MiniMax-M2.5");
         assert_eq!(default_model("zai"), "glm-4.7-flash");
         assert_eq!(default_model("ollama"), "llama3.3");
+        assert_eq!(default_model("lmstudio"), "qwen3.5-7b-instruct");
     }
 
     #[test]

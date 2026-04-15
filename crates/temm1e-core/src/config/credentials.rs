@@ -174,6 +174,7 @@ pub fn normalize_provider_name(name: &str) -> Option<&'static str> {
         "stepfun" | "step" => Some("stepfun"),
         "zai" | "zhipu" | "glm" => Some("zai"),
         "ollama" => Some("ollama"),
+        "lmstudio" | "lm-studio" | "lm_studio" => Some("lmstudio"),
         _ => None,
     }
 }
@@ -214,7 +215,8 @@ pub fn detect_api_key(text: &str) -> Option<DetectedCredential> {
         if p != "http" && p != "https" {
             match p.as_str() {
                 "anthropic" | "openai" | "gemini" | "grok" | "xai" | "openrouter" | "minimax"
-                | "stepfun" | "step" | "zai" | "zhipu" | "ollama" | "github" | "gh" => {
+                | "stepfun" | "step" | "zai" | "zhipu" | "ollama" | "lmstudio" | "lm-studio"
+                | "github" | "gh" => {
                     if key.len() >= 8 && !is_placeholder_key(key) {
                         return Some(DetectedCredential {
                             provider: match p.as_str() {
@@ -227,6 +229,7 @@ pub fn detect_api_key(text: &str) -> Option<DetectedCredential> {
                                 "stepfun" | "step" => "stepfun",
                                 "zai" | "zhipu" => "zai",
                                 "ollama" => "ollama",
+                                "lmstudio" | "lm-studio" => "lmstudio",
                                 "github" | "gh" => "github",
                                 _ => unreachable!(),
                             },
@@ -351,6 +354,19 @@ fn parse_proxy_config(text: &str) -> Option<DetectedCredential> {
 
     let provider = provider.unwrap_or("openai");
     let api_key = api_key?;
+
+    // For providers with an implicit local-default endpoint, persist the URL
+    // here so credentials.toml is self-describing and v5.3.2's skip condition
+    // in `validate_provider_key` (`config.base_url.is_some()`) covers this
+    // case automatically. Without this inject, `proxy lmstudio sk-key` (no
+    // URL) would produce `base_url = None`, validate would fall through to
+    // a real HTTP call, and the factory's injected localhost default would
+    // hang for ~120s waiting for a LM Studio instance that may not be
+    // running. See temm1e-labs/temm1e#45 (v5.3.3).
+    let base_url = base_url.or_else(|| match provider {
+        "lmstudio" => Some("http://localhost:1234/v1".to_string()),
+        _ => None,
+    });
 
     Some(DetectedCredential {
         provider,
@@ -614,7 +630,74 @@ mod tests {
         assert_eq!(normalize_provider_name("zhipu"), Some("zai"));
         assert_eq!(normalize_provider_name("glm"), Some("zai"));
         assert_eq!(normalize_provider_name("ollama"), Some("ollama"));
+        assert_eq!(normalize_provider_name("lmstudio"), Some("lmstudio"));
+        assert_eq!(normalize_provider_name("lm-studio"), Some("lmstudio"));
+        assert_eq!(normalize_provider_name("lm_studio"), Some("lmstudio"));
+        assert_eq!(normalize_provider_name("LMStudio"), Some("lmstudio"));
         assert_eq!(normalize_provider_name("unknown"), None);
+    }
+
+    #[test]
+    fn parse_proxy_lmstudio_with_explicit_url() {
+        // User-provided URL takes precedence and is stored verbatim.
+        let cred = detect_api_key("proxy lmstudio http://localhost:1234/v1 sk-anything").unwrap();
+        assert_eq!(cred.provider, "lmstudio");
+        assert_eq!(cred.api_key, "sk-anything");
+        assert_eq!(cred.base_url.as_deref(), Some("http://localhost:1234/v1"));
+    }
+
+    #[test]
+    fn parse_proxy_lmstudio_without_url_injects_localhost_default() {
+        // `proxy lmstudio sk-key` (no URL) — parse_proxy_config must inject
+        // the localhost default so credentials.toml is self-describing and
+        // v5.3.2's `base_url.is_some()` skip in validate_provider_key covers
+        // this case automatically. See #45.
+        let cred = detect_api_key("proxy lmstudio sk-anything-key-12345").unwrap();
+        assert_eq!(cred.provider, "lmstudio");
+        assert_eq!(cred.api_key, "sk-anything-key-12345");
+        assert_eq!(
+            cred.base_url.as_deref(),
+            Some("http://localhost:1234/v1"),
+            "lmstudio must get implicit localhost URL at parse time"
+        );
+    }
+
+    #[test]
+    fn parse_proxy_lmstudio_with_remote_url_overrides_default() {
+        // A remote LM Studio URL is honored and NOT overwritten by the
+        // localhost default. The `or_else` only fires when base_url is None.
+        let cred =
+            detect_api_key("proxy lmstudio http://10.0.0.5:1234/v1 sk-remote-key-12345").unwrap();
+        assert_eq!(cred.provider, "lmstudio");
+        assert_eq!(cred.base_url.as_deref(), Some("http://10.0.0.5:1234/v1"));
+    }
+
+    #[test]
+    fn parse_proxy_lmstudio_dashed_alias_also_injects_default() {
+        let cred = detect_api_key("proxy lm-studio sk-anything-key-12345").unwrap();
+        assert_eq!(cred.provider, "lmstudio");
+        assert_eq!(cred.base_url.as_deref(), Some("http://localhost:1234/v1"));
+    }
+
+    #[test]
+    fn parse_proxy_other_providers_do_not_get_lmstudio_default() {
+        // Regression guard: the or_else must only fire for lmstudio, not
+        // for any other provider. `proxy openai sk-key` (no URL) keeps
+        // base_url=None as before.
+        let cred = detect_api_key("proxy openai sk-test-anything-1234567890").unwrap();
+        assert_eq!(cred.provider, "openai");
+        assert!(
+            cred.base_url.is_none(),
+            "non-lmstudio providers must not get the lmstudio default URL"
+        );
+    }
+
+    #[test]
+    fn parse_explicit_lmstudio_prefix() {
+        // Format 2: `lmstudio:sk-anything` — explicit provider:key prefix.
+        let cred = detect_api_key("lmstudio:sk-anything-key-12345").unwrap();
+        assert_eq!(cred.provider, "lmstudio");
+        assert_eq!(cred.api_key, "sk-anything-key-12345");
     }
 
     // ── is_placeholder_key_lenient (Bug 1 fix — temm1e-labs/temm1e#44) ───

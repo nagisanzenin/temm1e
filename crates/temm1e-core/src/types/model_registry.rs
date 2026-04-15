@@ -406,6 +406,11 @@ pub fn default_model(provider_name: &str) -> &'static str {
         "stepfun" => "step-3.5-flash",
         "zai" => "glm-4.7-flash",
         "ollama" => "llama3.3",
+        // LM Studio runs whatever local model the user downloaded — there is
+        // no universal "default". This placeholder is a popular Qwen 3.5
+        // variant; users override it with `/addmodel <name> ...` as soon as
+        // they pick their actual model. See issue #45.
+        "lmstudio" => "qwen3.5-7b-instruct",
         _ => "claude-sonnet-4-6",
     }
 }
@@ -468,6 +473,19 @@ pub fn available_models_for_provider(provider: &str) -> Vec<&'static str> {
         ],
         "cohere" => vec!["command-a", "command-a-reasoning-08-2025", "command-r-plus"],
         "microsoft" => vec!["phi-4", "phi-4-mini-instruct", "phi-4-multimodal-instruct"],
+        // LM Studio runs arbitrary local models — the suggestions below are
+        // popular community defaults shown in /listmodels for orientation.
+        // Real models must be registered via /addmodel so context window and
+        // pricing are tracked correctly.
+        "lmstudio" => vec![
+            "qwen3.5-7b-instruct",
+            "qwen3.5-14b-instruct",
+            "qwen3-coder-30b-a3b",
+            "llama-3.3-8b-instruct",
+            "llama-3.3-70b-instruct",
+            "mistral-7b-instruct",
+            "phi-4",
+        ],
         _ => vec![],
     }
 }
