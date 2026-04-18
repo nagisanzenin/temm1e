@@ -77,7 +77,84 @@ version = "X.Y.Z"
 | System prompt provider list | All providers listed with models |
 | `auth status` output | Recommended model is correct |
 
-### 7. Final Verification
+### 7. Interactive Interface Parity Gate — MANDATORY
+
+**Every interactive interface must be fully wired before release.** TEMM1E has
+independent initialization paths for:
+
+| Interface | Code path | Notes |
+|---|---|---|
+| **TUI** (`temm1e tui`) | `crates/temm1e-tui/src/agent_bridge.rs :: spawn_agent()` | Primary install method per README — new users hit this first |
+| **CLI chat** (`temm1e chat`) | `src/main.rs :: Commands::Chat` | Primary self-test vehicle |
+| **Server/messengers** (`temm1e start`) | `src/main.rs :: Commands::Start` | Routes Telegram/Discord/WhatsApp/Slack through the shared agent init |
+
+Each path maintains its own tool-list assembly, Hive init (or lack of),
+agent construction, and background-service wiring. **Wiring a feature into
+one path does NOT wire it into the others.** This has silently drifted
+multiple times — v5.4.0 shipped with JIT `spawn_swarm` registered only in
+server; TUI has been missing a dozen subsystems for multiple releases.
+
+#### Parity matrix (update every release)
+
+Before pushing a release, confirm every shipped feature is wired in every
+interactive interface. Current snapshot (update at each release):
+
+| Feature | Server | CLI chat | TUI |
+|---|:---:|:---:|:---:|
+| Hive + JIT `spawn_swarm` | ✓ | ✓ (v5.4.0) | **must wire** |
+| Consciousness observer | ✓ | ✓ | **must wire** |
+| Social intelligence / user profile | ✓ | ✓ | **must wire** |
+| Personality config (`.with_personality`) | ✓ | ✓ | **must wire** |
+| Perpetuum (`.with_perpetuum_temporal`) | ✓ | ✓ | **must wire** |
+| MCP servers | ✓ | ✓ | **must wire** |
+| Custom tools + `SelfCreateTool` | ✓ | ✓ | **must wire** |
+| TemDOS cores + `invoke_core` | ✓ | ✓ | **must wire** |
+| Eigen-Tune engine | ✓ | ✓ | **must wire** |
+| Witness / Cambium trust / auto-oath | ✓ | — | — (opt-in, OK to defer) |
+| Shared memory strategy (`/memory lambda`) | ✓ | ✓ | **must wire** |
+| Vault + skill_registry wiring | ✓ | ✓ | **must wire** |
+
+#### Per-interface verification steps
+
+For **every** interface above, run a smoke test and confirm the feature's
+startup log appears. Example registration-log anchors:
+
+```bash
+# JIT swarm wired?
+./target/release/temm1e chat < /dev/null 2>&1 | grep "JIT spawn_swarm tool registered"
+./target/release/temm1e tui < /dev/null 2>&1 | grep "JIT spawn_swarm tool registered"
+
+# Consciousness wired?
+./target/release/temm1e chat < /dev/null 2>&1 | grep "Tem Conscious: LLM-powered consciousness initialized"
+
+# Hive instance created (needed for swarm)?
+./target/release/temm1e chat < /dev/null 2>&1 | grep "Many Tems initialized"
+```
+
+For every feature listed in the release: include a greppable registration
+log message, run the smoke test against EACH interface, and paste the
+greps into the release report. A missing log = a missing wiring = blocker
+for release unless the release notes EXPLICITLY declare non-parity for
+that interface.
+
+#### Rules
+
+1. **Never declare a feature "shipped" based on one interface's logs.**
+   CLI chat passing ≠ TUI passing ≠ server passing. Each must be checked.
+2. **"Feature wasn't triggered" must be distinguished from "feature wasn't
+   registered."** Grep for the registration log first; then grep for the
+   execution log. Skipping step one confuses a wiring bug with a
+   behavioural outcome.
+3. **When adding a feature, add its registration log alongside the code.**
+   Future wiring checks depend on this anchor.
+4. **Opt-in features** (Witness, Cambium, auto_planner_oath) may legitimately
+   be absent from interactive interfaces, but the release notes must call
+   that out.
+5. **Non-interactive paths** (MCP client only, tool servers, background
+   cron) are out of scope for the parity gate but still need their own
+   smoke tests.
+
+### 8. Final Verification
 
 After all edits, re-run:
 
@@ -88,7 +165,7 @@ cargo test --workspace 2>&1 | grep 'test result' | awk '{sum += $4} END {print s
 
 Confirm test count still matches what you wrote in README.
 
-### 8. Commit and Push
+### 9. Commit and Push
 
 ```bash
 git add -A
@@ -96,7 +173,7 @@ git commit -m "vX.Y.Z: <one-line summary>"
 git push origin main
 ```
 
-### 9. Tag and Release
+### 10. Tag and Release
 
 **CRITICAL — this triggers the GitHub release pipeline.**
 Without the tag, no binaries are built and no GitHub release is created.

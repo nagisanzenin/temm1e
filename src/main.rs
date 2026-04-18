@@ -6384,6 +6384,78 @@ Just type a message to chat with the AI agent.",
                                 tracing::info!("TemDOS invoke_core tool registered (CLI)");
                             }
 
+                            // ── JIT spawn_swarm tool registration (CLI chat path) ──
+                            // Register the tool into the CLI agent's toolset with a
+                            // deferred SwarmHandle. Hive is initialized below and the
+                            // context is filled afterward. The tool snapshot captured
+                            // at handle-fill time is the set BEFORE spawn_swarm is
+                            // pushed, so workers physically cannot see it (recursion
+                            // filter is belt-and-suspenders).
+                            let cli_swarm_snapshot = tools_template.clone();
+                            let cli_swarm_handle: Option<temm1e_agent::spawn_swarm::SwarmHandle> =
+                                if hive_enabled_early {
+                                    let h =
+                                        temm1e_agent::spawn_swarm::SpawnSwarmTool::fresh_handle();
+                                    tools_template.push(Arc::new(
+                                        temm1e_agent::spawn_swarm::SpawnSwarmTool::new(h.clone()),
+                                    ));
+                                    tracing::info!(
+                                        "JIT spawn_swarm tool registered (CLI, context deferred)"
+                                    );
+                                    Some(h)
+                                } else {
+                                    None
+                                };
+
+                            // ── Hive pack initialization for CLI chat ──
+                            // Required for both dispatch-time HiveRoute and JIT
+                            // spawn_swarm. Fetches the [hive] section from the active
+                            // config; opens the same SQLite db as the start command.
+                            let cli_hive_instance: Option<Arc<temm1e_hive::Hive>> =
+                                if hive_enabled_early {
+                                    let hive_config: temm1e_hive::HiveConfig = {
+                                        #[derive(serde::Deserialize, Default)]
+                                        struct HW {
+                                            #[serde(default)]
+                                            hive: temm1e_hive::HiveConfig,
+                                        }
+                                        config_path
+                                            .and_then(|p| std::fs::read_to_string(p).ok())
+                                            .or_else(|| {
+                                                dirs::home_dir().and_then(|h| {
+                                                    std::fs::read_to_string(
+                                                        h.join(".temm1e/config.toml"),
+                                                    )
+                                                    .ok()
+                                                })
+                                            })
+                                            .or_else(|| std::fs::read_to_string("temm1e.toml").ok())
+                                            .and_then(|c| toml::from_str::<HW>(&c).ok())
+                                            .map(|w| w.hive)
+                                            .unwrap_or_default()
+                                    };
+                                    let hive_db = dirs::home_dir()
+                                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                                        .join(".temm1e/hive.db");
+                                    let hive_url = format!("sqlite:{}?mode=rwc", hive_db.display());
+                                    match temm1e_hive::Hive::new(&hive_config, &hive_url).await {
+                                        Ok(h) => {
+                                            tracing::info!(
+                                                max_workers = hive_config.max_workers,
+                                                threshold = hive_config.swarm_threshold_speedup,
+                                                "Many Tems initialized (CLI Swarm Intelligence)"
+                                            );
+                                            Some(Arc::new(h))
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "CLI Hive init failed — JIT swarm disabled");
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    None
+                                };
+
                             // ── Eigen-Tune: load + instantiate engine for CLI chat ──
                             let cli_eigentune_cfg = load_eigentune_config_from_path(config_path);
                             let cli_eigen_tune_engine: Option<
@@ -6583,6 +6655,27 @@ Just type a message to chat with the AI agent.",
                                 }
                             }
                             rt = rt.with_perpetuum_temporal(cli_perp_temporal.clone());
+
+                            // ── Fill JIT spawn_swarm handle (CLI chat path) ──
+                            // Context uses the tool snapshot captured before
+                            // spawn_swarm was pushed — workers never see it.
+                            if let (Some(hive), Some(handle)) =
+                                (cli_hive_instance.as_ref(), cli_swarm_handle.as_ref())
+                            {
+                                let ctx = temm1e_agent::spawn_swarm::SpawnSwarmContext {
+                                    hive: Arc::clone(hive),
+                                    provider: rt.provider_arc(),
+                                    memory: memory.clone(),
+                                    tools_template: cli_swarm_snapshot.clone(),
+                                    model: rt.model().to_string(),
+                                    parent_budget: Arc::new(
+                                        temm1e_agent::budget::BudgetTracker::new(max_spend),
+                                    ),
+                                    cancel: tokio_util::sync::CancellationToken::new(),
+                                };
+                                *handle.write().await = Some(ctx);
+                                tracing::info!("JIT spawn_swarm context wired (CLI)");
+                            }
 
                             agent_opt = Some(rt);
                             println!("Connected to {} (model: {})", pname, model);

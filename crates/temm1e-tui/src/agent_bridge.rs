@@ -21,6 +21,42 @@ use temm1e_core::types::session::SessionContext;
 
 use crate::event::{AgentResponseEvent, Event};
 
+/// Read the `[hive] enabled` flag directly from the config TOML file
+/// (mirrors the pattern in main.rs since HiveConfig is not part of
+/// the main Temm1eConfig struct — circular-dep constraint).
+fn read_hive_enabled() -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct HC {
+        #[serde(default)]
+        hive: HE,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct HE {
+        #[serde(default)]
+        enabled: bool,
+    }
+    dirs::home_dir()
+        .and_then(|h| std::fs::read_to_string(h.join(".temm1e/config.toml")).ok())
+        .or_else(|| std::fs::read_to_string("temm1e.toml").ok())
+        .and_then(|c| toml::from_str::<HC>(&c).ok())
+        .map(|c| c.hive.enabled)
+        .unwrap_or(false)
+}
+
+fn read_hive_config() -> temm1e_hive::HiveConfig {
+    #[derive(serde::Deserialize, Default)]
+    struct HW {
+        #[serde(default)]
+        hive: temm1e_hive::HiveConfig,
+    }
+    dirs::home_dir()
+        .and_then(|h| std::fs::read_to_string(h.join(".temm1e/config.toml")).ok())
+        .or_else(|| std::fs::read_to_string("temm1e.toml").ok())
+        .and_then(|c| toml::from_str::<HW>(&c).ok())
+        .map(|w| w.hive)
+        .unwrap_or_default()
+}
+
 /// Everything needed to communicate with the running agent.
 pub struct AgentHandle {
     /// Send user messages to the agent processing loop.
@@ -140,7 +176,7 @@ pub async fn spawn_agent(
     };
     let shared_mode: Arc<RwLock<Temm1eMode>> = Arc::new(RwLock::new(initial_mode));
 
-    let tools = temm1e_tools::create_tools(
+    let mut tools = temm1e_tools::create_tools(
         &setup.config.tools,
         None, // No channel for tool output — TUI handles display
         None, // No pending messages
@@ -149,15 +185,96 @@ pub async fn spawn_agent(
         None, // No usage store for tools
         Some(shared_mode.clone()),
         None, // No vault for TUI mode
-        None, // No skill registry for TUI mode (TODO: wire in)
+        None, // No skill registry for TUI mode
     );
+
+    // ── Load personality for TUI (matches server/CLI pattern) ──
+    let tui_personality = Arc::new(temm1e_anima::personality::PersonalityConfig::load(
+        &dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".temm1e"),
+    ));
+
+    // ── Social intelligence: user profile storage ──
+    let tui_social_config = setup.config.social.clone();
+    let tui_social_storage: Option<Arc<temm1e_anima::SocialStorage>> = if tui_social_config.enabled
+    {
+        let social_db_url = format!(
+            "sqlite:{}/social.db?mode=rwc",
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".temm1e")
+                .display()
+        );
+        match temm1e_anima::SocialStorage::new(&social_db_url).await {
+            Ok(s) => {
+                tracing::info!("Social intelligence initialized (TUI)");
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "TUI: failed to init social storage");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // ── Shared memory strategy handle (for /memory lambda command) ──
+    // Default to Lambda to match server/CLI.
+    let shared_memory_strategy: Arc<RwLock<temm1e_core::types::config::MemoryStrategy>> = Arc::new(
+        RwLock::new(temm1e_core::types::config::MemoryStrategy::Lambda),
+    );
+
+    // ── JIT spawn_swarm tool registration (TUI path) ──
+    // Per feedback_interactive_interface_parity: TUI must have feature
+    // parity with server/CLI for every interactive interface. The tool
+    // snapshot captured here (before spawn_swarm is pushed) is what
+    // workers see — plus the per-runtime tool_filter blocks recursion.
+    let tui_hive_enabled = read_hive_enabled();
+    let tui_swarm_snapshot = tools.clone();
+    let tui_swarm_handle: Option<temm1e_agent::spawn_swarm::SwarmHandle> = if tui_hive_enabled {
+        let h = temm1e_agent::spawn_swarm::SpawnSwarmTool::fresh_handle();
+        tools.push(Arc::new(temm1e_agent::spawn_swarm::SpawnSwarmTool::new(
+            h.clone(),
+        )));
+        tracing::info!("JIT spawn_swarm tool registered (TUI, context deferred)");
+        Some(h)
+    } else {
+        None
+    };
+
+    // ── Hive pack initialization for TUI ──
+    let tui_hive_instance: Option<Arc<temm1e_hive::Hive>> = if tui_hive_enabled {
+        let hive_config = read_hive_config();
+        let hive_db = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".temm1e/hive.db");
+        let hive_url = format!("sqlite:{}?mode=rwc", hive_db.display());
+        match temm1e_hive::Hive::new(&hive_config, &hive_url).await {
+            Ok(h) => {
+                tracing::info!(
+                    max_workers = hive_config.max_workers,
+                    threshold = hive_config.swarm_threshold_speedup,
+                    "Many Tems initialized (TUI Swarm Intelligence)"
+                );
+                Some(Arc::new(h))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "TUI Hive init failed — JIT swarm disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // 5. Build system prompt
     let system_prompt = Some(build_tui_system_prompt());
 
     // 6. Create agent runtime
-    let agent = AgentRuntime::with_limits(
-        provider,
+    let mut agent = AgentRuntime::with_limits(
+        provider.clone(),
         memory.clone(),
         tools,
         setup.model.clone(),
@@ -169,7 +286,58 @@ pub async fn spawn_agent(
         setup.config.agent.max_spend_usd,
     )
     .with_v2_optimizations(setup.config.agent.v2_optimizations)
-    .with_shared_mode(shared_mode);
+    .with_parallel_phases(setup.config.agent.parallel_phases)
+    .with_hive_enabled(tui_hive_enabled)
+    .with_shared_mode(shared_mode.clone())
+    .with_shared_memory_strategy(shared_memory_strategy.clone())
+    .with_personality(tui_personality)
+    .with_social(
+        tui_social_storage.clone(),
+        if tui_social_config.enabled {
+            Some(tui_social_config.clone())
+        } else {
+            None
+        },
+    );
+
+    // ── Consciousness: enable LLM-powered observer if configured ──
+    if setup.config.consciousness.enabled {
+        let consciousness_cfg = temm1e_agent::consciousness::ConsciousnessConfig {
+            enabled: true,
+            confidence_threshold: setup.config.consciousness.confidence_threshold,
+            max_interventions_per_session: setup.config.consciousness.max_interventions_per_session,
+            observation_mode: setup.config.consciousness.observation_mode.clone(),
+        };
+        agent = agent.with_consciousness(
+            temm1e_agent::consciousness_engine::ConsciousnessEngine::new(
+                consciousness_cfg,
+                provider.clone(),
+                setup.model.clone(),
+            ),
+        );
+        tracing::info!("Tem Conscious initialized (TUI)");
+    }
+
+    // ── Fill JIT spawn_swarm handle (TUI path) ──
+    // Context uses the tool snapshot captured before spawn_swarm was
+    // pushed — workers physically cannot see it (recursion block).
+    if let (Some(hive), Some(handle)) = (tui_hive_instance.as_ref(), tui_swarm_handle.as_ref()) {
+        let ctx = temm1e_agent::spawn_swarm::SpawnSwarmContext {
+            hive: Arc::clone(hive),
+            provider: agent.provider_arc(),
+            memory: memory.clone(),
+            tools_template: tui_swarm_snapshot.clone(),
+            model: agent.model().to_string(),
+            parent_budget: Arc::new(temm1e_agent::budget::BudgetTracker::new(
+                setup.config.agent.max_spend_usd,
+            )),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        *handle.write().await = Some(ctx);
+        tracing::info!("JIT spawn_swarm context wired (TUI)");
+    }
+
+    let agent = agent; // freeze mutability
 
     // 7. Set up channels
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(64);
