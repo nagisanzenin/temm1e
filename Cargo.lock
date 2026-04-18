@@ -6986,6 +6986,7 @@ dependencies = [
  "temm1e-cambium",
  "temm1e-core",
  "temm1e-distill",
+ "temm1e-hive",
  "temm1e-providers",
  "temm1e-test-utils",
  "temm1e-tools",

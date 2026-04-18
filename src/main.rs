@@ -2404,6 +2404,23 @@ async fn main() -> Result<()> {
             let agent_state: Arc<tokio::sync::RwLock<Option<Arc<temm1e_agent::AgentRuntime>>>> =
                 Arc::new(tokio::sync::RwLock::new(None));
 
+            // ── JIT spawn_swarm tool: register early with a deferred handle ──
+            // The tool is in tools_template from the start so every agent sees
+            // it; the handle is populated later, after Hive + agent are ready.
+            // When the handle is still empty at execute time, the tool returns
+            // a graceful "not available yet" message.
+            let swarm_handle: Option<temm1e_agent::spawn_swarm::SwarmHandle> = if hive_enabled_early
+            {
+                let h = temm1e_agent::spawn_swarm::SpawnSwarmTool::fresh_handle();
+                tools.push(Arc::new(temm1e_agent::spawn_swarm::SpawnSwarmTool::new(
+                    h.clone(),
+                )));
+                tracing::info!("JIT spawn_swarm tool registered (context deferred)");
+                Some(h)
+            } else {
+                None
+            };
+
             // ── Eigen-Tune: load [eigentune] config + instantiate engine ──
             // Hoisted to outer scope so both the agent construction (inside
             // the credentials block below) and the periodic tick task
@@ -2890,6 +2907,34 @@ async fn main() -> Result<()> {
             };
 
             let hive_enabled_flag = hive_instance.is_some();
+
+            // ── JIT spawn_swarm tool: fill in the handle now that Hive + agent
+            // are both ready. The tool was registered earlier with an empty
+            // handle; we populate it here using the active agent's provider,
+            // model, memory, and a snapshot of tools (excluding spawn_swarm
+            // itself via the recursion-filter inside the tool).
+            if let (Some(hive), Some(handle)) = (hive_instance.as_ref(), swarm_handle.as_ref()) {
+                let agent_opt = agent_state.read().await.clone();
+                if let Some(agent) = agent_opt {
+                    let ctx = temm1e_agent::spawn_swarm::SpawnSwarmContext {
+                        hive: Arc::clone(hive),
+                        provider: agent.provider_arc(),
+                        memory: memory.clone(),
+                        tools_template: tools.clone(),
+                        model: agent.model().to_string(),
+                        parent_budget: Arc::new(temm1e_agent::budget::BudgetTracker::new(
+                            config.agent.max_spend_usd,
+                        )),
+                        cancel: tokio_util::sync::CancellationToken::new(),
+                    };
+                    *handle.write().await = Some(ctx);
+                    tracing::info!("JIT spawn_swarm context wired");
+                } else {
+                    tracing::warn!(
+                        "Hive initialized but no agent yet — spawn_swarm context deferred"
+                    );
+                }
+            }
 
             // ── Per-chat serial executor ───────────────────────
 
