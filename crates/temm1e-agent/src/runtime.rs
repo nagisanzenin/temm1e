@@ -100,6 +100,19 @@ pub type SharedMode = Arc<RwLock<Temm1eMode>>;
 /// Maximum characters per tool output (roughly ~8K tokens).
 const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
 
+/// Record a provider failure into the circuit breaker UNLESS the error is a
+/// rate-limit. A 429 is a throttle signal, not a provider-health signal, and
+/// must not count toward the CB's failure threshold. Other errors (Auth,
+/// Provider, network) still trip the breaker on repeated failures.
+#[inline]
+fn record_cb_failure_unless_rate_limit(cb: &CircuitBreaker, err: &Temm1eError) {
+    if matches!(err, Temm1eError::RateLimited(_)) {
+        tracing::debug!("circuit breaker: ignoring RateLimited (not a health signal)");
+    } else {
+        cb.record_failure();
+    }
+}
+
 /// Shared pending-message queue (same type as temm1e_tools::PendingMessages).
 pub type PendingMessages = Arc<std::sync::Mutex<HashMap<String, Vec<String>>>>;
 
@@ -1434,7 +1447,7 @@ impl AgentRuntime {
                                     continue;
                                 }
                             }
-                            self.circuit_breaker.record_failure();
+                            record_cb_failure_unless_rate_limit(&self.circuit_breaker, &e);
                             return Err(e);
                         }
                     }
@@ -1475,7 +1488,7 @@ impl AgentRuntime {
                                     resp
                                 }
                                 Err(e) => {
-                                    self.circuit_breaker.record_failure();
+                                    record_cb_failure_unless_rate_limit(&self.circuit_breaker, &e);
                                     return Err(e);
                                 }
                             }
@@ -1492,7 +1505,7 @@ impl AgentRuntime {
                                     resp
                                 }
                                 Err(e) => {
-                                    self.circuit_breaker.record_failure();
+                                    record_cb_failure_unless_rate_limit(&self.circuit_breaker, &e);
                                     return Err(e);
                                 }
                             }
@@ -1551,7 +1564,7 @@ impl AgentRuntime {
                                     resp
                                 }
                                 Err(e) => {
-                                    self.circuit_breaker.record_failure();
+                                    record_cb_failure_unless_rate_limit(&self.circuit_breaker, &e);
                                     return Err(e);
                                 }
                             }
@@ -1570,7 +1583,7 @@ impl AgentRuntime {
                             resp
                         }
                         Err(e) => {
-                            self.circuit_breaker.record_failure();
+                            record_cb_failure_unless_rate_limit(&self.circuit_breaker, &e);
                             return Err(e);
                         }
                     };
@@ -3056,6 +3069,59 @@ pub fn model_supports_vision(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Circuit breaker rate-limit exemption (P1) ───────────────
+
+    #[test]
+    fn rate_limit_does_not_trip_cb() {
+        let cb = CircuitBreaker::new(3, std::time::Duration::from_secs(30));
+        let rate_limit = Temm1eError::RateLimited("429".into());
+
+        // Feed 10 rate-limit "failures" — CB must stay Closed.
+        for _ in 0..10 {
+            record_cb_failure_unless_rate_limit(&cb, &rate_limit);
+        }
+        assert_eq!(
+            cb.state(),
+            crate::circuit_breaker::CircuitState::Closed,
+            "CB should remain Closed after rate-limit errors only"
+        );
+        assert!(cb.can_execute());
+    }
+
+    #[test]
+    fn provider_error_still_trips_cb() {
+        let cb = CircuitBreaker::new(3, std::time::Duration::from_secs(30));
+        let provider_err = Temm1eError::Provider("500 bad gateway".into());
+
+        for _ in 0..3 {
+            record_cb_failure_unless_rate_limit(&cb, &provider_err);
+        }
+        assert_eq!(
+            cb.state(),
+            crate::circuit_breaker::CircuitState::Open,
+            "CB should Open after threshold provider errors"
+        );
+    }
+
+    #[test]
+    fn mixed_errors_only_non_rate_limit_count() {
+        let cb = CircuitBreaker::new(3, std::time::Duration::from_secs(30));
+        let rate_limit = Temm1eError::RateLimited("429".into());
+        let auth_err = Temm1eError::Auth("bad key".into());
+
+        // Interleave — only Auth counts toward threshold.
+        record_cb_failure_unless_rate_limit(&cb, &rate_limit);
+        record_cb_failure_unless_rate_limit(&cb, &auth_err);
+        record_cb_failure_unless_rate_limit(&cb, &rate_limit);
+        record_cb_failure_unless_rate_limit(&cb, &auth_err);
+        // 2 Auth failures so far → still Closed
+        assert_eq!(cb.state(), crate::circuit_breaker::CircuitState::Closed);
+
+        record_cb_failure_unless_rate_limit(&cb, &auth_err);
+        // 3 Auth failures → threshold hit → Open
+        assert_eq!(cb.state(), crate::circuit_breaker::CircuitState::Open);
+    }
 
     // ── Vision capability checks ────────────────────────────────
 
