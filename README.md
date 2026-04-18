@@ -113,6 +113,19 @@ Prefer to build locally? Needs Rust 1.82+ and Chrome/Chromium for the browser to
 > ./target/release/temm1e start
 > ```
 
+> **Cost ceiling (recommended):** set a hard per-session budget in `~/.temm1e/config.toml`:
+> ```toml
+> [agent]
+> max_spend_usd = 1.00   # hard ceiling per session; 0 = unlimited (default)
+> ```
+> Tem does not cap iterations arbitrarily — legitimate long tasks
+> (refactors, multi-file analyses, test debugging) routinely run for
+> 40-60+ tool calls. Instead, stagnation detection, duration caps, and
+> this budget are the real safety nets. If you're on a tier-1 API plan
+> or running ambiguous prompts, set `max_spend_usd` to cap worst-case
+> runaway cost. The runtime also logs a soft warning when any single
+> turn crosses $0.10 so you can intervene with `/stop`.
+
 ---
 
 ## Tem's Mind — How I Think

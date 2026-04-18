@@ -104,6 +104,12 @@ pub type ToolFilter = Arc<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
 /// Maximum characters per tool output (roughly ~8K tokens).
 const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
 
+/// Soft per-turn cost advisory threshold (USD). When a single turn exceeds
+/// this, we emit a `tracing::warn!` once so operators can notice runaway
+/// tool loops on ambiguous prompts. Log-only — no behavior change; users
+/// who need a hard ceiling set `[agent] max_spend_usd` in config.
+const SOFT_TURN_COST_WARNING_USD: f64 = 0.10;
+
 /// Record a provider failure into the circuit breaker UNLESS the error is a
 /// rate-limit. A 429 is a throttle signal, not a provider-health signal, and
 /// must not count toward the CB's failure threshold. Other errors (Auth,
@@ -1177,6 +1183,8 @@ impl AgentRuntime {
         // 2-3 step retry flows.
         let mut stagnation = crate::stagnation::StagnationDetector::new();
         let mut stagnation_detected = false;
+        // Observability: once-per-turn flag for the soft cost advisory warning.
+        let mut soft_cost_warning_emitted = false;
         // Track if send_message tool was used — suppresses the final reply
         // to avoid duplicating content already delivered to the user.
         let mut send_message_used = false;
@@ -1707,6 +1715,22 @@ impl AgentRuntime {
             turn_input_tokens = turn_input_tokens.saturating_add(response.usage.input_tokens);
             turn_output_tokens = turn_output_tokens.saturating_add(response.usage.output_tokens);
             turn_cost_usd += call_cost;
+
+            // Observability: soft warning when a single turn crosses the cost
+            // advisory threshold. This is log-only — no behavior change. Users
+            // who need a hard ceiling can set [agent] max_spend_usd in config.
+            if turn_cost_usd > SOFT_TURN_COST_WARNING_USD && !soft_cost_warning_emitted {
+                tracing::warn!(
+                    turn_cost_usd = format!("{:.4}", turn_cost_usd),
+                    threshold_usd = SOFT_TURN_COST_WARNING_USD,
+                    rounds = rounds,
+                    api_calls = turn_api_calls,
+                    "High per-turn cost — if the model appears to be looping on an \
+                     ambiguous prompt, consider setting [agent] max_spend_usd as a \
+                     hard ceiling or issuing a /stop"
+                );
+                soft_cost_warning_emitted = true;
+            }
 
             // ── Cancellation check point (v4.8.0) ───────────────────
             // The top-of-loop check catches cancels between rounds,

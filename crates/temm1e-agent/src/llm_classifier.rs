@@ -88,7 +88,7 @@ For "stop": write a 1-word acknowledgment in the user's language.
 
 "standard" — a multi-step task that requires tools (file writes, shell commands, etc.)
 
-"complex" — ANY task that asks for 3 or more separate things. If the user lists numbered items (1, 2, 3...) or asks for multiple files/modules/functions/components, it is ALWAYS "complex". Examples: "build 5 modules", "write these 4 functions", "I need: 1) X 2) Y 3) Z". When in doubt between "standard" and "complex", choose "complex"
+"complex" — ANY task that asks for 3 or more separate things THAT CAN RUN INDEPENDENTLY AND IN PARALLEL. Key test: could worker A finish without ever seeing worker B's output? If YES → complex. If worker B's input depends on worker A's output → NOT complex, it's "standard". Examples: "build 5 independent modules", "I need: 1) X 2) Y 3) Z where X/Y/Z are unrelated". SEQUENTIAL CHAINS ("A calls B calls C", "load → parse → save", "step 1 then step 2 then step 3") are ALWAYS "standard" because they are serialized by definition — parallel workers cannot help. When in doubt between "standard" and "complex", choose "standard" (the single agent with its tool loop handles sequential work efficiently; swarms only beat sequential when items are actually independent).
 
 ## EXAMPLES
 
@@ -100,6 +100,12 @@ Output: {"category":"order","chat_text":"on it, looking at main.rs","difficulty"
 
 User: "build 5 independent Python modules with tests for each"
 Output: {"category":"order","chat_text":"Big project! Building 5 modules with tests","difficulty":"complex"}
+
+User: "write a function that calls another function that calls a third"
+Output: {"category":"order","chat_text":"on it — three-link call chain","difficulty":"standard"}
+
+User: "load the CSV, parse it, and save the result as JSON"
+Output: {"category":"order","chat_text":"load → parse → save, on it","difficulty":"standard"}
 
 User: "stop"
 Output: {"category":"stop","chat_text":"stopped!","difficulty":"simple"}
