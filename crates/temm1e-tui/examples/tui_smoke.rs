@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 ///   3  — spawn_agent returned Err
 ///   4  — agent did not respond within the response timeout
 ///   5  — agent response was empty
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Logs to stdout with info-level — same destination the parity grep
     // protocol expects to find registration anchors.
@@ -94,17 +94,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // ── EXHAUSTIVE TEST: drive a real user message through the agent ──
-    // This exercises: classifier → agent loop → provider call → response
-    // → event_tx back to the consumer. If ANY subsystem wired into the
-    // agent is broken, the response will timeout or error.
-    eprintln!("[SMOKE] sending test message: 'what can you do in 1 sentence?'");
+    // Prompt: defaults to "what can you do in 1 sentence?" but accepts a
+    // --prompt "..." CLI arg so the harness can be driven through a UX
+    // study or a regression battery.
+    let args: Vec<String> = std::env::args().collect();
+    let prompt_text = args
+        .iter()
+        .position(|a| a == "--prompt")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "what can you do in 1 sentence?".to_string());
+
+    eprintln!("[SMOKE] sending: {prompt_text}");
+    let t_send = std::time::Instant::now();
     let msg = InboundMessage {
         id: uuid::Uuid::new_v4().to_string(),
         chat_id: "tui-smoke".into(),
         user_id: "smoke-test".into(),
         username: Some("smoke".into()),
         channel: "tui-smoke".into(),
-        text: Some("what can you do in 1 sentence?".into()),
+        text: Some(prompt_text.clone()),
         attachments: vec![],
         reply_to: None,
         timestamp: chrono::Utc::now(),
@@ -115,8 +124,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("inbound send failed: {e}"))?;
 
-    // Wait up to 90s for a response event.
-    let timeout = Duration::from_secs(90);
+    // Wait up to 180s for a response event (accommodates cold-start Perpetuum
+    // + Chronos temporal_injection + consciousness pre_observe + classifier +
+    // main reply on tier-1 providers).
+    let timeout = Duration::from_secs(180);
     let deadline = tokio::time::Instant::now() + timeout;
     let mut got_response = false;
     let mut response_text = String::new();
@@ -126,14 +137,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(Some(Event::AgentResponse(resp))) => {
                 got_response = true;
                 response_text = resp.message.text;
+                let elapsed = t_send.elapsed();
                 eprintln!(
-                    "[SMOKE] usage: in={} out={} cost=${:.4}",
-                    resp.input_tokens, resp.output_tokens, resp.cost_usd
+                    "[SMOKE] wall={}.{}s usage: in={} out={} cost=${:.4}",
+                    elapsed.as_secs(),
+                    elapsed.subsec_millis() / 100,
+                    resp.input_tokens,
+                    resp.output_tokens,
+                    resp.cost_usd
                 );
                 break;
             }
-            Ok(Some(_other)) => {
-                // Non-response events (status updates, tool notifications).
+            Ok(Some(other)) => {
+                // Diagnostic: log every non-response event so we can see what's firing.
+                let tag = match &other {
+                    Event::Terminal(_) => "Terminal",
+                    Event::AgentStatus(_) => "AgentStatus",
+                    Event::StreamChunk(_) => "StreamChunk",
+                    Event::UserSubmit(_) => "UserSubmit",
+                    Event::AgentResponse(_) => "AgentResponse",
+                    _ => "Other",
+                };
+                eprintln!("[SMOKE-EVT] {tag}");
                 continue;
             }
             Ok(None) => {
@@ -157,12 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(5);
     }
 
-    eprintln!("[SMOKE] AGENT RESPONDED: {} chars", response_text.len());
-    eprintln!(
-        "[SMOKE] first 200 chars: {}",
-        &response_text.chars().take(200).collect::<String>()
-    );
-
+    eprintln!("[SMOKE] AGENT RESPONDED ({} chars):", response_text.len());
+    println!("{response_text}");
     eprintln!("[SMOKE] DONE — all checks passed");
     Ok(())
 }

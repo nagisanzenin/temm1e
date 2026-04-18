@@ -167,7 +167,11 @@ impl GeminiProvider {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(180))
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
         }
     }

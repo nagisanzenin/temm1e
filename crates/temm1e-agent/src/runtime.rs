@@ -937,7 +937,13 @@ impl AgentRuntime {
                 None
             };
 
-            match crate::llm_classifier::classify_message(
+            // Safety-net timeout on the classifier LLM call (30s). Under normal
+            // operation the classifier returns in 1–6 s across all supported
+            // providers. A longer stall indicates a provider-side incident;
+            // falling through to the rule-based classifier keeps the session
+            // alive rather than blocking the user. Root-cause notes:
+            // docs/full-sweep-1/TUI-CLASSIFIER-HANG.md.
+            let classify_fut = crate::llm_classifier::classify_message(
                 self.provider.as_ref(),
                 &self.model,
                 &user_text,
@@ -946,9 +952,18 @@ impl AgentRuntime {
                 current_mode,
                 self.personality.as_deref(),
                 profile_summary.as_deref(),
-            )
-            .await
-            {
+            );
+            let classify_result =
+                tokio::time::timeout(std::time::Duration::from_secs(30), classify_fut).await;
+            let unwrapped = classify_result.unwrap_or_else(|_| {
+                tracing::warn!(
+                    "classify_message hit 30s safety timeout — falling back to rule-based classifier"
+                );
+                Err(Temm1eError::Provider(
+                    "classify_message 30s timeout".to_string(),
+                ))
+            });
+            match unwrapped {
                 Ok((classification, classify_usage)) => {
                     // Record classification call in per-turn accumulators
                     let classify_cost = crate::budget::calculate_cost(
