@@ -196,6 +196,17 @@ struct OpenAIMessage {
     role: String,
     content: Option<String>,
     tool_calls: Option<Vec<OpenAIToolCall>>,
+    // Reasoning-model fields. Providers split answer text across multiple field
+    // names; we accept them all and fall back when `content` is empty. See
+    // extract_reasoning() for priority order and the provider-to-field map.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    reasoning_details: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,6 +247,12 @@ struct OpenAIStreamDelta {
     role: Option<String>,
     content: Option<String>,
     tool_calls: Option<Vec<OpenAIStreamToolCall>>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -619,6 +636,59 @@ fn convert_tool_to_openai(tool: &ToolDefinition) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// Reasoning field extraction
+// ---------------------------------------------------------------------------
+//
+// "OpenAI-compatible" isn't a real spec. Reasoning-model providers each invented
+// their own field for the answer text. This extractor handles all known
+// variants with one priority list — adding a new one is a one-line change.
+//
+//   reasoning_content  DeepSeek R1/V3, Zhipu GLM 4.5+, MiniMax M-series, Kimi K2+,
+//                      Qwen/vLLM/SGLang, xAI Grok reasoning, AWS Bedrock
+//   reasoning          OpenRouter canonical (also accepts reasoning_content alias)
+//   thinking           proxy shims, litellm's normalization target
+//   reasoning_details  OpenRouter structured (array of typed text blocks)
+
+/// Extract fallback reasoning text from a non-streaming message.
+///
+/// Returns the first non-empty field in priority order, or flattens
+/// `reasoning_details[].text` if only the structured form is populated.
+fn extract_reasoning(msg: &OpenAIMessage) -> Option<String> {
+    for s in [&msg.reasoning_content, &msg.reasoning, &msg.thinking]
+        .into_iter()
+        .flatten()
+    {
+        if !s.is_empty() {
+            return Some(s.clone());
+        }
+    }
+    if let Some(details) = &msg.reasoning_details {
+        let joined: String = details
+            .iter()
+            .filter_map(|d| d.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("");
+        if !joined.is_empty() {
+            return Some(joined);
+        }
+    }
+    None
+}
+
+/// Extract reasoning text from a streaming delta. Same priority as
+/// `extract_reasoning` but operates on the delta's string fields only —
+/// `reasoning_details` is streamed per-index by OpenRouter and is redundant
+/// with the flat `reasoning` field for our fallback purpose.
+fn extract_delta_reasoning(delta: &OpenAIStreamDelta) -> Option<&str> {
+    delta
+        .reasoning_content
+        .as_deref()
+        .or(delta.reasoning.as_deref())
+        .or(delta.thinking.as_deref())
+        .filter(|s| !s.is_empty())
+}
+
+// ---------------------------------------------------------------------------
 // Provider trait implementation
 // ---------------------------------------------------------------------------
 
@@ -793,9 +863,27 @@ impl Provider for OpenAICompatProvider {
 
         let mut content = Vec::new();
 
+        let reasoning_fallback = extract_reasoning(&choice.message);
+        let has_tool_calls = choice
+            .message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
+
         if let Some(text) = choice.message.content {
             if !text.is_empty() {
                 content.push(ContentPart::Text { text });
+            }
+        }
+
+        if content.is_empty() && !has_tool_calls {
+            if let Some(reasoning) = reasoning_fallback {
+                info!(
+                    provider = "openai-compat",
+                    model = %request.model,
+                    "Using reasoning field as fallback — content was empty"
+                );
+                content.push(ContentPart::Text { text: reasoning });
             }
         }
 
@@ -820,6 +908,18 @@ impl Provider for OpenAICompatProvider {
                 cost_usd: 0.0,
             })
             .unwrap_or_default();
+
+        // Safety net: loud log when the response is truly empty despite
+        // completion tokens being billed. Any new quirky field surfaces here.
+        if content.is_empty() && usage.output_tokens > 0 {
+            tracing::warn!(
+                provider = "openai-compat",
+                model = %request.model,
+                completion_tokens = usage.output_tokens,
+                raw_body_preview = %body_text.chars().take(2000).collect::<String>(),
+                "Empty response despite completion_tokens > 0 — possible unknown reasoning field"
+            );
+        }
 
         Ok(CompletionResponse {
             id: api_response.id.unwrap_or_default(),
@@ -901,18 +1001,46 @@ impl Provider for OpenAICompatProvider {
 
         let byte_stream = response.bytes_stream();
 
-        // State: (byte_stream, buffer, active_tool_calls: Vec<(id, name, arguments_json)>)
+        // State: (byte_stream, buffer, tool_calls, reasoning_buffer, content_emitted)
+        //
+        // reasoning_buffer accumulates `delta.reasoning_content` / `delta.reasoning`
+        // / `delta.thinking` chunks. content_emitted tracks whether any non-empty
+        // content delta was emitted. On finish/stream-end, if content_emitted is
+        // still false and reasoning_buffer has text, we flush the buffer as one
+        // final text chunk — otherwise the user sees silent failure.
         let event_stream = futures::stream::unfold(
             (
                 byte_stream,
                 String::new(),
-                Vec::<(String, String, String)>::new(), // accumulated tool calls
+                Vec::<(String, String, String)>::new(),
+                String::new(),
+                false,
             ),
-            |(mut byte_stream, mut buffer, mut tool_calls)| async move {
+            |(
+                mut byte_stream,
+                mut buffer,
+                mut tool_calls,
+                mut reasoning_buffer,
+                mut content_emitted,
+            )| async move {
                 loop {
                     // Try to extract a complete SSE event from the buffer
-                    if let Some(result) = extract_openai_sse_event(&mut buffer, &mut tool_calls) {
-                        return Some((result, (byte_stream, buffer, tool_calls)));
+                    if let Some(result) = extract_openai_sse_event(
+                        &mut buffer,
+                        &mut tool_calls,
+                        &mut reasoning_buffer,
+                        &mut content_emitted,
+                    ) {
+                        return Some((
+                            result,
+                            (
+                                byte_stream,
+                                buffer,
+                                tool_calls,
+                                reasoning_buffer,
+                                content_emitted,
+                            ),
+                        ));
                     }
 
                     // Need more data
@@ -924,13 +1052,53 @@ impl Provider for OpenAICompatProvider {
                         Some(Err(e)) => {
                             return Some((
                                 Err(Temm1eError::Provider(format!("Stream read error: {e}"))),
-                                (byte_stream, buffer, tool_calls),
+                                (
+                                    byte_stream,
+                                    buffer,
+                                    tool_calls,
+                                    reasoning_buffer,
+                                    content_emitted,
+                                ),
                             ));
                         }
                         None => {
+                            // Stream ended. If content was never emitted but we
+                            // accumulated reasoning, flush it first so the user
+                            // sees a response instead of silence.
+                            if !content_emitted && !reasoning_buffer.is_empty() {
+                                let text = std::mem::take(&mut reasoning_buffer);
+                                content_emitted = true;
+                                tracing::info!(
+                                    provider = "openai-compat",
+                                    "Stream ended without finish_reason — flushing reasoning buffer"
+                                );
+                                return Some((
+                                    Ok(StreamChunk {
+                                        delta: Some(text),
+                                        tool_use: None,
+                                        stop_reason: None,
+                                    }),
+                                    (
+                                        byte_stream,
+                                        buffer,
+                                        tool_calls,
+                                        reasoning_buffer,
+                                        content_emitted,
+                                    ),
+                                ));
+                            }
                             // Stream ended; emit any remaining tool calls
                             if let Some(result) = flush_tool_calls(&mut tool_calls) {
-                                return Some((result, (byte_stream, buffer, tool_calls)));
+                                return Some((
+                                    result,
+                                    (
+                                        byte_stream,
+                                        buffer,
+                                        tool_calls,
+                                        reasoning_buffer,
+                                        content_emitted,
+                                    ),
+                                ));
                             }
                             return None;
                         }
@@ -996,6 +1164,8 @@ impl Provider for OpenAICompatProvider {
 fn extract_openai_sse_event(
     buffer: &mut String,
     tool_calls: &mut Vec<(String, String, String)>,
+    reasoning_buffer: &mut String,
+    content_emitted: &mut bool,
 ) -> Option<Result<StreamChunk, Temm1eError>> {
     loop {
         // Look for a complete event (terminated by double newline)
@@ -1020,6 +1190,20 @@ fn extract_openai_sse_event(
 
         // [DONE] signals stream end
         if data.trim() == "[DONE]" {
+            // Flush reasoning buffer if content was never emitted
+            if !*content_emitted && !reasoning_buffer.is_empty() {
+                let text = std::mem::take(reasoning_buffer);
+                *content_emitted = true;
+                tracing::info!(
+                    provider = "openai-compat",
+                    "Streaming [DONE]: flushing reasoning buffer — content was never emitted"
+                );
+                return Some(Ok(StreamChunk {
+                    delta: Some(text),
+                    tool_use: None,
+                    stop_reason: None,
+                }));
+            }
             // Flush any remaining tool calls
             if let Some(result) = flush_tool_calls(tool_calls) {
                 // Put a marker so we don't re-process [DONE]
@@ -1069,13 +1253,25 @@ fn extract_openai_sse_event(
                 }
             }
 
-            // Text delta
+            // Text delta — emit immediately. Track non-empty emissions so we
+            // know whether to flush reasoning_buffer on finish.
             if let Some(ref text) = choice.delta.content {
+                if !text.is_empty() {
+                    *content_emitted = true;
+                }
                 return Some(Ok(StreamChunk {
                     delta: Some(text.clone()),
                     tool_use: None,
                     stop_reason: None,
                 }));
+            }
+
+            // Reasoning delta — accumulate silently. Flushed only on finish
+            // if content was never streamed (fallback for reasoning-only
+            // responses like max_tokens-cut-off-during-thinking).
+            if let Some(reasoning) = extract_delta_reasoning(&choice.delta) {
+                reasoning_buffer.push_str(reasoning);
+                continue;
             }
 
             // Finish reason
@@ -1085,6 +1281,25 @@ fn extract_openai_sse_event(
                     if let Some(result) = flush_tool_calls(tool_calls) {
                         return Some(result);
                     }
+                }
+
+                // Reasoning-only response: flush buffer WITH stop_reason so
+                // the stream terminates cleanly in one chunk. Without the
+                // stop_reason here the downstream receives the text but
+                // never sees an end-of-stream signal (buffer is drained).
+                if !*content_emitted && !reasoning_buffer.is_empty() {
+                    let text = std::mem::take(reasoning_buffer);
+                    *content_emitted = true;
+                    tracing::info!(
+                        provider = "openai-compat",
+                        finish_reason = %reason,
+                        "Streaming: flushing reasoning buffer — content was never emitted"
+                    );
+                    return Some(Ok(StreamChunk {
+                        delta: Some(text),
+                        tool_use: None,
+                        stop_reason: Some(reason.clone()),
+                    }));
                 }
 
                 return Some(Ok(StreamChunk {
@@ -1325,8 +1540,15 @@ mod tests {
     fn sse_text_delta() {
         let mut buffer = "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n".to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_some());
         let chunk = result.unwrap().unwrap();
         assert_eq!(chunk.delta.as_deref(), Some("Hello"));
@@ -1371,8 +1593,15 @@ mod tests {
     fn sse_done_signal() {
         let mut buffer = "data: [DONE]\n\n".to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_none());
     }
 
@@ -1439,8 +1668,15 @@ mod tests {
         // These must be ignored by the parser.
         let mut buffer = ": OPENROUTER PROCESSING\n\ndata: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n".to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_some());
         let chunk = result.unwrap().unwrap();
         assert_eq!(chunk.delta.as_deref(), Some("Hi"));
@@ -1451,8 +1687,15 @@ mod tests {
         // Multiple keepalive comments before actual data
         let mut buffer = ": OPENROUTER PROCESSING\n\n: OPENROUTER PROCESSING\n\ndata: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n".to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_some());
         let chunk = result.unwrap().unwrap();
         assert_eq!(chunk.delta.as_deref(), Some("OK"));
@@ -1463,8 +1706,15 @@ mod tests {
         // OpenRouter sends finish_reason: "error" for mid-stream provider errors
         let mut buffer = "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"upstream timeout\"},\"finish_reason\":\"error\"}]}\n\n".to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_some());
         let err = result.unwrap().unwrap_err();
         match err {
@@ -1482,8 +1732,15 @@ mod tests {
             "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\n"
                 .to_string();
         let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
 
-        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        let result = extract_openai_sse_event(
+            &mut buffer,
+            &mut tool_calls,
+            &mut reasoning_buffer,
+            &mut content_emitted,
+        );
         assert!(result.is_some());
         let err = result.unwrap().unwrap_err();
         match err {
@@ -1538,5 +1795,285 @@ mod tests {
         }"#;
         let response: OpenAIResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.id.as_deref(), Some("chatcmpl-123"));
+    }
+
+    // -----------------------------------------------------------------------
+    // GH-49: reasoning-field fallback (DeepSeek, GLM, Kimi, MiniMax, Qwen,
+    // Grok reasoning, OpenRouter). Covers the 10-scenario matrix from the
+    // zero-risk report.
+    // -----------------------------------------------------------------------
+
+    fn build_msg_from_json(json: &str) -> OpenAIMessage {
+        serde_json::from_str(json).expect("test fixture must deserialize")
+    }
+
+    #[test]
+    fn reasoning_content_fallback_when_content_null() {
+        // DeepSeek R1 truncated during reasoning: content=null, reasoning_content populated.
+        let msg = build_msg_from_json(
+            r#"{"role":"assistant","content":null,"reasoning_content":"The answer is 42."}"#,
+        );
+        assert_eq!(
+            extract_reasoning(&msg).as_deref(),
+            Some("The answer is 42.")
+        );
+    }
+
+    #[test]
+    fn reasoning_fallback_when_content_empty_string() {
+        // OpenRouter canonical field: content="", reasoning populated.
+        let msg = build_msg_from_json(
+            r#"{"role":"assistant","content":"","reasoning":"Step by step solution."}"#,
+        );
+        assert_eq!(
+            extract_reasoning(&msg).as_deref(),
+            Some("Step by step solution.")
+        );
+    }
+
+    #[test]
+    fn thinking_fallback() {
+        // litellm normalization target — some proxy shims use `thinking`.
+        let msg = build_msg_from_json(r#"{"role":"assistant","thinking":"Thinking aloud..."}"#);
+        assert_eq!(
+            extract_reasoning(&msg).as_deref(),
+            Some("Thinking aloud...")
+        );
+    }
+
+    #[test]
+    fn reasoning_details_fallback() {
+        // OpenRouter structured reasoning blocks — flatten .text fields.
+        let msg = build_msg_from_json(
+            r#"{
+                "role":"assistant",
+                "content":null,
+                "reasoning_details":[
+                    {"type":"reasoning.text","text":"First I need to ","format":"anthropic-claude-v1","index":0},
+                    {"type":"reasoning.text","text":"analyze the problem.","format":"anthropic-claude-v1","index":1}
+                ]
+            }"#,
+        );
+        assert_eq!(
+            extract_reasoning(&msg).as_deref(),
+            Some("First I need to analyze the problem.")
+        );
+    }
+
+    #[test]
+    fn content_wins_when_both_populated() {
+        // DeepSeek normal response: both content and reasoning_content populated.
+        // content always wins — reasoning is scratch and should be dropped.
+        let json = r#"{
+            "id": "chatcmpl-x",
+            "choices":[{
+                "message":{
+                    "role":"assistant",
+                    "content":"The final answer.",
+                    "reasoning_content":"Internal thinking..."
+                },
+                "finish_reason":"stop"
+            }]
+        }"#;
+        let response: OpenAIResponse = serde_json::from_str(json).unwrap();
+        let msg = &response.choices[0].message;
+        // Content is populated — fallback should NOT be used downstream.
+        assert_eq!(msg.content.as_deref(), Some("The final answer."));
+        // But extract_reasoning itself does return the reasoning text if asked.
+        // The gating logic in complete() ensures content wins.
+        assert_eq!(
+            extract_reasoning(msg).as_deref(),
+            Some("Internal thinking...")
+        );
+    }
+
+    #[test]
+    fn extract_reasoning_returns_none_for_all_empty() {
+        // No reasoning fields populated — extractor returns None.
+        let msg = build_msg_from_json(r#"{"role":"assistant","content":null}"#);
+        assert!(extract_reasoning(&msg).is_none());
+    }
+
+    #[test]
+    fn extract_reasoning_skips_empty_strings() {
+        // Empty strings must not trip the fallback.
+        let msg = build_msg_from_json(
+            r#"{"role":"assistant","reasoning_content":"","reasoning":"","thinking":"actual"}"#,
+        );
+        assert_eq!(extract_reasoning(&msg).as_deref(), Some("actual"));
+    }
+
+    #[test]
+    fn sse_reasoning_only_stream_flushes_on_finish() {
+        // DeepSeek-style reasoning phase that never transitions to content
+        // (e.g., max_tokens cutoff during thinking). Buffer must flush on
+        // finish_reason so the user sees the reasoning as the response.
+        let mut buffer = String::from(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Let me think about this...\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\" the answer is 42.\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        );
+        let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
+
+        // Drain: first two reasoning chunks accumulate silently (None + None),
+        // third finish chunk flushes buffer as a text chunk, then stop chunk.
+        let mut emitted = Vec::new();
+        loop {
+            match extract_openai_sse_event(
+                &mut buffer,
+                &mut tool_calls,
+                &mut reasoning_buffer,
+                &mut content_emitted,
+            ) {
+                Some(Ok(chunk)) => emitted.push(chunk),
+                Some(Err(e)) => panic!("unexpected error: {e:?}"),
+                None => break,
+            }
+        }
+
+        // Expect: one text chunk with the joined reasoning, then one stop chunk.
+        let text_chunks: Vec<_> = emitted.iter().filter_map(|c| c.delta.as_deref()).collect();
+        assert_eq!(text_chunks.len(), 1, "expected one flushed text chunk");
+        assert_eq!(
+            text_chunks[0],
+            "Let me think about this... the answer is 42."
+        );
+
+        let stop_chunks: Vec<_> = emitted
+            .iter()
+            .filter_map(|c| c.stop_reason.as_deref())
+            .collect();
+        assert_eq!(stop_chunks, vec!["length"]);
+    }
+
+    #[test]
+    fn sse_reasoning_then_content_drops_reasoning() {
+        // Normal DeepSeek flow: reasoning phase → content phase → stop.
+        // Content is emitted; reasoning buffer is discarded (it's scratch).
+        let mut buffer = String::from(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Answer.\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
+
+        let mut emitted = Vec::new();
+        loop {
+            match extract_openai_sse_event(
+                &mut buffer,
+                &mut tool_calls,
+                &mut reasoning_buffer,
+                &mut content_emitted,
+            ) {
+                Some(Ok(chunk)) => emitted.push(chunk),
+                Some(Err(e)) => panic!("unexpected error: {e:?}"),
+                None => break,
+            }
+        }
+
+        let text_chunks: Vec<_> = emitted
+            .iter()
+            .filter_map(|c| c.delta.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text_chunks,
+            vec!["Answer."],
+            "only content should be emitted, reasoning is scratch"
+        );
+        let stop_chunks: Vec<_> = emitted
+            .iter()
+            .filter_map(|c| c.stop_reason.as_deref())
+            .collect();
+        assert_eq!(stop_chunks, vec!["stop"]);
+    }
+
+    #[test]
+    fn sse_content_then_reasoning_drops_reasoning() {
+        // GLM ordering quirk: content BEFORE reasoning. Still emit only content.
+        let mut buffer = String::from(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"First.\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"post-hoc thinking\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
+
+        let mut emitted = Vec::new();
+        loop {
+            match extract_openai_sse_event(
+                &mut buffer,
+                &mut tool_calls,
+                &mut reasoning_buffer,
+                &mut content_emitted,
+            ) {
+                Some(Ok(chunk)) => emitted.push(chunk),
+                Some(Err(e)) => panic!("unexpected error: {e:?}"),
+                None => break,
+            }
+        }
+
+        let text_chunks: Vec<_> = emitted.iter().filter_map(|c| c.delta.as_deref()).collect();
+        assert_eq!(text_chunks, vec!["First."]);
+        assert!(content_emitted, "content_emitted should be true");
+    }
+
+    #[test]
+    fn sse_reasoning_only_done_marker_flushes() {
+        // Reasoning-only stream terminated by [DONE] (no explicit finish_reason).
+        // The [DONE] handler must also flush the reasoning buffer.
+        let mut buffer = String::from(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning\":\"partial thought\"},\"finish_reason\":null}]}\n\n\
+             data: [DONE]\n\n",
+        );
+        let mut tool_calls = Vec::new();
+        let mut reasoning_buffer = String::new();
+        let mut content_emitted = false;
+
+        let mut emitted = Vec::new();
+        loop {
+            match extract_openai_sse_event(
+                &mut buffer,
+                &mut tool_calls,
+                &mut reasoning_buffer,
+                &mut content_emitted,
+            ) {
+                Some(Ok(chunk)) => emitted.push(chunk),
+                Some(Err(e)) => panic!("unexpected error: {e:?}"),
+                None => break,
+            }
+        }
+
+        let text_chunks: Vec<_> = emitted.iter().filter_map(|c| c.delta.as_deref()).collect();
+        assert_eq!(text_chunks, vec!["partial thought"]);
+    }
+
+    #[test]
+    fn stream_delta_deserializes_reasoning_fields() {
+        // Verify all three flat reasoning fields deserialize from a delta.
+        let d1: OpenAIStreamDelta = serde_json::from_str(r#"{"reasoning_content":"a"}"#).unwrap();
+        assert_eq!(extract_delta_reasoning(&d1), Some("a"));
+
+        let d2: OpenAIStreamDelta = serde_json::from_str(r#"{"reasoning":"b"}"#).unwrap();
+        assert_eq!(extract_delta_reasoning(&d2), Some("b"));
+
+        let d3: OpenAIStreamDelta = serde_json::from_str(r#"{"thinking":"c"}"#).unwrap();
+        assert_eq!(extract_delta_reasoning(&d3), Some("c"));
+
+        // Priority: reasoning_content wins over reasoning wins over thinking.
+        let d4: OpenAIStreamDelta = serde_json::from_str(
+            r#"{"reasoning_content":"win","reasoning":"lose","thinking":"lose"}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_delta_reasoning(&d4), Some("win"));
+
+        // Empty strings don't trigger extraction.
+        let d5: OpenAIStreamDelta =
+            serde_json::from_str(r#"{"reasoning_content":"","role":"assistant"}"#).unwrap();
+        assert_eq!(extract_delta_reasoning(&d5), None);
     }
 }
