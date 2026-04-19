@@ -224,6 +224,39 @@ impl Default for BrowserTool {
     }
 }
 
+/// Returns a per-process Chrome user-data-dir path.
+///
+/// The PID suffix prevents two concurrent Temm1e instances — or a crashed
+/// prior run leaving a stale `SingletonLock` — from colliding on Chrome's
+/// singleton check. Without this, chromiumoxide 0.7 falls back to a shared
+/// default under `%TEMP%/chromiumoxide-runner`, which reproducibly triggers
+/// Chrome exit code 21 (`RESULT_CODE_PROFILE_IN_USE`) on every platform,
+/// reported most visibly on Windows 11 (GH-50).
+pub(crate) fn per_process_profile(subname: &str) -> std::path::PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("temm1e")
+        .join(format!("{subname}-{}", std::process::id()))
+}
+
+/// Remove Chromium singleton-lock files from a single profile dir.
+///
+/// Narrow-scope, idempotent companion to `BrowserTool::cleanup_singleton_locks`
+/// (which also cleans the user's real Chrome profile on shutdown). This
+/// variant only touches the path it is given and is safe to call before every
+/// launch — graceful shutdown is never guaranteed (panic / SIGKILL / OS
+/// reboot), so stale locks may persist and block the next cold start.
+pub(crate) fn clear_singleton_locks_at(profile: &std::path::Path) {
+    for name in &[
+        "SingletonLock",
+        "SingletonSocket",
+        "SingletonCookie",
+        "lockfile",
+    ] {
+        let _ = std::fs::remove_file(profile.join(name));
+    }
+}
+
 impl BrowserTool {
     /// Create a new browser tool with default timeout (0 = persistent, no idle timeout).
     pub fn new() -> Self {
@@ -838,7 +871,15 @@ impl BrowserTool {
             }
         }
 
-        builder = builder.user_data_dir(&work_profile).arg("--no-first-run");
+        // Remove any stale singleton-lock files from the work profile before
+        // Chrome starts. A crashed prior run leaves these behind and the next
+        // launch dies with exit code 21 (RESULT_CODE_PROFILE_IN_USE). See GH-50.
+        clear_singleton_locks_at(&work_profile);
+
+        builder = builder
+            .user_data_dir(&work_profile)
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check");
 
         // TEMM1E_NO_STEALTH=1 disables all anti-detection flags (for sites
         // like Zalo that detect stealth flags themselves and show blank pages)

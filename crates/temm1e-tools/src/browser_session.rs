@@ -202,7 +202,14 @@ impl InteractiveBrowseSession {
             .join("temm1e")
             .join("browser-profile");
         if work_profile.exists() {
-            builder = builder.user_data_dir(&work_profile).arg("--no-first-run");
+            // Wipe any stale singleton locks from a crashed prior run — otherwise
+            // the launch dies with exit code 21 (RESULT_CODE_PROFILE_IN_USE).
+            // See GH-50.
+            crate::browser::clear_singleton_locks_at(&work_profile);
+            builder = builder
+                .user_data_dir(&work_profile)
+                .arg("--no-first-run")
+                .arg("--no-default-browser-check");
         }
 
         if std::env::var("TEMM1E_CLEAN_BROWSER").unwrap_or_default() == "1" {

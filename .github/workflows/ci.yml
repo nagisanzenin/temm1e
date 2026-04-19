@@ -63,6 +63,59 @@ jobs:
         run: cargo test --workspace
 
   # -----------------------------------------------
+  # Job 2b: Windows cross-platform gate — fmt + clippy + test on windows-latest
+  #
+  # Proves that Temm1e compiles and its unit tests pass on Windows. Added in
+  # v5.4.5 as part of GH-50 / GH-51 Windows support. Intentionally NOT marked
+  # as `needs: check` — runs independently of the Linux pipeline so a Windows
+  # regression doesn't block Linux-only releases, and vice versa.
+  #
+  # Scope:
+  # - All default features except desktop-control (xcap/enigo need Linux
+  #   system libs that don't apply on Windows; desktop support on Windows is
+  #   tracked separately). We build with --no-default-features + the Windows-
+  #   compatible feature subset to keep the gate fast and focused.
+  # - Tests that spawn real Chrome are skipped automatically (no Chrome
+  #   preinstalled on windows-latest; cfg-gated or ignored in the test body).
+  # - `continue-on-error: true` during the initial Windows rollout — surfaces
+  #   any Windows-only issues without blocking main-branch CI. Flip to `false`
+  #   once green for a full pipeline.
+  # -----------------------------------------------
+  test-windows:
+    name: Test (windows-latest)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-latest
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy (default features, skip desktop-control)
+        shell: bash
+        run: |
+          cargo clippy --workspace --all-targets \
+            --no-default-features \
+            --features telegram,discord,browser,mcp,codex-oauth,tui \
+            -- -D warnings
+
+      - name: Run tests (default features, skip desktop-control)
+        shell: bash
+        run: |
+          cargo test --workspace \
+            --no-default-features \
+            --features telegram,discord,browser,mcp,codex-oauth,tui
+
+  # -----------------------------------------------
   # Job 3a: Build musl release binary (servers, no desktop control)
   # -----------------------------------------------
   build-musl:

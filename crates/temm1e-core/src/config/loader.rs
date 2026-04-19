@@ -2,12 +2,30 @@ use crate::types::config::{AgentAccessibleConfig, Temm1eConfig};
 use crate::types::error::Temm1eError;
 use std::path::{Path, PathBuf};
 
-/// Discover config file locations in priority order
+/// Discover config file locations in priority order.
+///
+/// Platform-aware system-wide config path:
+/// - Unix (Linux/macOS/BSD): `/etc/temm1e/config.toml`
+/// - Windows: `%PROGRAMDATA%\temm1e\config.toml` (typically
+///   `C:\ProgramData\temm1e\config.toml`).
+///
+/// User config is cross-platform via `dirs::home_dir()`:
+/// - Unix: `~/.temm1e/config.toml`
+/// - Windows: `%USERPROFILE%\.temm1e\config.toml`
 fn config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     // 1. System config
+    #[cfg(not(windows))]
     paths.push(PathBuf::from("/etc/temm1e/config.toml"));
+    #[cfg(windows)]
+    if let Some(programdata) = std::env::var_os("PROGRAMDATA") {
+        paths.push(
+            PathBuf::from(programdata)
+                .join("temm1e")
+                .join("config.toml"),
+        );
+    }
 
     // 2. User config
     if let Some(home) = dirs::home_dir() {
@@ -148,10 +166,10 @@ mod tests {
     #[test]
     fn test_default_config_no_file() {
         // When no config file exists, load_config should return defaults.
-        // Use an explicit nonexistent path to avoid picking up ~/.temm1e/config.toml.
-        let config = load_config(Some(std::path::Path::new(
-            "/tmp/temm1e_nonexistent_config.toml",
-        )));
+        // Use a path under the OS temp dir (cross-platform) with a unique name
+        // that is never created — `/tmp/...` only exists on Unix.
+        let missing = std::env::temp_dir().join("temm1e_nonexistent_config_never_created.toml");
+        let config = load_config(Some(&missing));
         // If the file doesn't exist, load_config returns an error. Test defaults via
         // the Default trait instead.
         assert!(config.is_err());
@@ -240,9 +258,10 @@ api_key = "${TEMM1E_TEST_API_KEY}"
 
     #[test]
     fn test_missing_config_file() {
-        let result = load_config(Some(std::path::Path::new(
-            "/tmp/nonexistent_temm1e_config_12345.toml",
-        )));
+        // Use the OS temp dir (cross-platform) with a unique never-created name.
+        let missing =
+            std::env::temp_dir().join("nonexistent_temm1e_config_12345_never_created.toml");
+        let result = load_config(Some(&missing));
         assert!(result.is_err());
     }
 

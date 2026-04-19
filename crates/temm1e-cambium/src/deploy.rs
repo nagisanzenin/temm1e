@@ -720,20 +720,28 @@ mod tests {
     }
 
     /// Create a tiny shell-script "binary" that responds to --version.
+    ///
+    /// Unix-only: the helper writes a POSIX shell script and relies on
+    /// direct `execve` of the shebang. Windows doesn't execute arbitrary
+    /// files without a known extension, and `CreateProcess` on `.cmd`
+    /// files requires cmd.exe interpretation — neither of which matches
+    /// the production codepath we're exercising. Tests using this helper
+    /// are cfg-gated below; Windows compatibility for the `Deployer` flow
+    /// is validated via compilation + cross-platform unit tests elsewhere
+    /// (`validate_missing_binary_fails`, `backup_current_*`, etc.).
+    #[cfg(unix)]
     async fn write_fake_binary(path: &Path, exit_code: i32, version_string: &str) {
         let script = format!(
             "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{version_string}'; exit {exit_code}; fi\nsleep 60\n"
         );
         tokio::fs::write(path, script).await.unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(path).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(path, perms).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn validate_existing_binary_succeeds() {
         let tmp = tempdir().unwrap();
@@ -765,6 +773,7 @@ mod tests {
         assert!(result.unwrap_err().contains("does not exist"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn validate_failing_version_fails() {
         let tmp = tempdir().unwrap();
@@ -943,6 +952,7 @@ mod tests {
         };
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn full_swap_without_pid_file_succeeds() {
         // End-to-end swap of a fake binary, no process management.
@@ -984,6 +994,7 @@ mod tests {
         assert_eq!(backups.len(), 1);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn swap_aborts_on_invalid_new_binary() {
         let tmp = tempdir().unwrap();
