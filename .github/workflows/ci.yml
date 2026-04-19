@@ -77,14 +77,12 @@ jobs:
   #   compatible feature subset to keep the gate fast and focused.
   # - Tests that spawn real Chrome are skipped automatically (no Chrome
   #   preinstalled on windows-latest; cfg-gated or ignored in the test body).
-  # - `continue-on-error: true` during the initial Windows rollout — surfaces
-  #   any Windows-only issues without blocking main-branch CI. Flip to `false`
-  #   once green for a full pipeline.
+  # - v5.4.7: `continue-on-error` removed — Windows is now a hard gate.
+  #   First green run: commit ae463c8 (run 24622226445, 2026-04-19).
   # -----------------------------------------------
   test-windows:
     name: Test (windows-latest)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
