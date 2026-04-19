@@ -68,12 +68,11 @@ impl StdioTransport {
             cmd.env(key, value);
         }
 
-        // On Windows, create detached process to avoid console window
+        // On Windows, create detached process to avoid console window.
+        // tokio::process::Command exposes `creation_flags` directly on Windows
+        // (no `std::os::windows::process::CommandExt` import needed).
         #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x00000008); // DETACHED_PROCESS
-        }
+        cmd.creation_flags(0x00000008); // DETACHED_PROCESS
 
         let mut child = cmd.spawn().map_err(|e| {
             Temm1eError::Tool(format!(
