@@ -1,9 +1,14 @@
 //! # Real CLI test: swap an actual temm1e binary in an isolated test dir.
 //!
+//! **Unix-only.** Hardcoded `/tmp/temm1e-deploy-test` path + `--version`
+//! spawn semantics assume POSIX exec rules. Windows cambium swap is
+//! covered by the cross-platform unit tests in `src/deploy.rs`.
+//!
 //! This is the Phase 5d "real binary swap" test. It uses the actual built
 //! temm1e release binary, NOT a shell-script fake. The test runs ONLY when
 //! both `target/release/temm1e` exists AND the env var
 //! `TEMM1E_CAMBIUM_REAL_TEST=1` is set, to avoid running by default.
+#![cfg(unix)]
 //!
 //! ## Production safety
 //!
@@ -57,6 +62,11 @@ fn should_run_real_test() -> bool {
     std::env::var("TEMM1E_CAMBIUM_REAL_TEST").unwrap_or_default() == "1"
 }
 
+// Hardcoded `/tmp/temm1e-deploy-test` path; runs only under opt-in
+// `TEMM1E_CAMBIUM_REAL_TEST=1`. Treat as Unix-only — the Windows swap
+// path is covered by unit tests in src/deploy.rs (which already include
+// the taskkill branch).
+#[cfg(unix)]
 #[tokio::test]
 async fn real_temm1e_binary_swap_end_to_end() {
     if !should_run_real_test() {

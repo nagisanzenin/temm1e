@@ -3,6 +3,13 @@
 //! These tests use shell scripts as "binaries" and exercise the full
 //! Deployer.swap() protocol against an isolated tempdir. No real temm1e
 //! binary is touched.
+//!
+//! **Unix-only.** The fake binaries are `#!/bin/sh` shell scripts that
+//! Windows `CreateProcess` cannot execute without a `.bat`/`.cmd` extension
+//! and a compatible interpreter. The matching production codepaths
+//! (kill/taskkill split, validate, swap) are covered by cross-platform
+//! unit tests inside `src/deploy.rs`, so no Windows coverage is lost.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -76,6 +83,12 @@ fn write_broken_version_temm1e(path: &Path) {
     write_executable_script(path, script);
 }
 
+// Uses POSIX shell scripts with `#!/bin/sh` shebang as fake binaries.
+// Windows `CreateProcess` cannot execute shebang-only files and has no
+// direct PowerShell equivalent that exercises the Deployer's spawn path the
+// same way. The matching production codepaths (kill/taskkill, validate,
+// swap) are covered by cross-platform unit tests in src/deploy.rs.
+#[cfg(unix)]
 #[tokio::test]
 async fn deploy_swap_replaces_old_binary_with_new() {
     let tmp = tempdir().unwrap();
@@ -131,6 +144,7 @@ async fn deploy_swap_replaces_old_binary_with_new() {
     println!("Backup file: {}", backups[0].file_name().to_string_lossy());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn deploy_swap_aborts_on_broken_version() {
     let tmp = tempdir().unwrap();
@@ -174,6 +188,7 @@ async fn deploy_swap_aborts_on_broken_version() {
     assert!(version_text.contains("1.0.0"));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn deploy_swap_with_pid_file_starts_new_process() {
     let tmp = tempdir().unwrap();
@@ -234,6 +249,7 @@ async fn deploy_swap_with_pid_file_starts_new_process() {
     let _ = std::fs::remove_file(&pid_file);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn deploy_swap_rollback_on_failed_start() {
     let tmp = tempdir().unwrap();

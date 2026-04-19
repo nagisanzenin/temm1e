@@ -467,8 +467,18 @@ mod tests {
             "x".to_string(),
             "main".to_string(),
         );
-        let result = sb.write_file(Path::new("/etc/passwd"), "data").await;
-        assert!(result.is_err());
+        // `std::env::temp_dir()` returns an absolute path on every platform —
+        // `/tmp/...` on Unix, `C:\Users\...\AppData\Local\Temp\...` on Windows.
+        // A hardcoded `/etc/passwd` would test only Unix semantics because
+        // `Path::is_absolute()` returns `false` for Unix-rooted paths on
+        // Windows (Windows needs a drive letter or UNC prefix to be absolute).
+        let absolute_outside_sandbox = std::env::temp_dir().join("temm1e_sandbox_test_target");
+        let result = sb.write_file(&absolute_outside_sandbox, "data").await;
+        assert!(
+            result.is_err(),
+            "expected sandbox to reject absolute path {}",
+            absolute_outside_sandbox.display()
+        );
         assert!(result.unwrap_err().to_string().contains("Absolute"));
     }
 

@@ -1372,6 +1372,11 @@ mod tests {
         assert_eq!(r2.outcome, VerdictOutcome::Pass);
     }
 
+    // `true` / `false` are POSIX builtins/commands — not on Windows PATH.
+    // The production `CommandExits` predicate itself is shell-agnostic
+    // (spawns whatever cmd name the caller provides), so cfg-gating just
+    // the Unix test commands here is the right scope.
+    #[cfg(unix)]
     #[tokio::test]
     async fn command_exits_pass() {
         let dir = tempdir().unwrap();
@@ -1391,6 +1396,7 @@ mod tests {
         assert_eq!(r.outcome, VerdictOutcome::Pass);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn command_exits_fail() {
         let dir = tempdir().unwrap();
@@ -1514,6 +1520,8 @@ mod tests {
         assert_eq!(r.outcome, VerdictOutcome::Pass);
     }
 
+    // Uses the Unix-only `true` builtin inside the composite — gate to Unix.
+    #[cfg(unix)]
     #[tokio::test]
     async fn any_of_composite() {
         let dir = tempdir().unwrap();
