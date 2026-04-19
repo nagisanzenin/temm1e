@@ -99,8 +99,26 @@ async fn execute_command_check(
     command: &str,
     working_dir: Option<&str>,
 ) -> Result<CheckResult, Temm1eError> {
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c").arg(command);
+    // Platform-aware shell dispatch — mirrors `ShellTool::build_shell_command`:
+    // POSIX `sh -c` on Unix, PowerShell 5.1 on Windows (always bundled, no
+    // ExecutionPolicy concern for inline `-Command`). See GH-51 for the full
+    // rationale; without this the Perpetuum command monitor is non-functional
+    // on Windows (no `sh.exe` on PATH).
+    #[cfg(unix)]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg(command);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("powershell.exe");
+        c.arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(command);
+        c
+    };
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
     }

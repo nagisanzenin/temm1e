@@ -129,10 +129,18 @@ async fn proof_01_real_data_collection() {
     println!("PROOF OF PIPELINE: Real Data Collection");
     println!("============================================================\n");
 
-    // Create real database
-    let db_path = "/tmp/eigentune_proof.db";
-    let _ = std::fs::remove_file(db_path);
-    let db_url = format!("sqlite:{}?mode=rwc", db_path);
+    // Create real database under the OS temp dir (cross-platform — `/tmp` is
+    // Unix-only; Windows uses `%TEMP%`).
+    let db_path = std::env::temp_dir().join("eigentune_proof.db");
+    let _ = std::fs::remove_file(&db_path);
+    // SQLite needs the path in its URI form with forward slashes on all
+    // platforms. `.to_string_lossy()` preserves backslashes on Windows which
+    // sqlx / rusqlite accept via the `file:` URI interpretation, but the
+    // `sqlite:<path>` short form works more reliably when we normalize to `/`.
+    let db_url = format!(
+        "sqlite:{}?mode=rwc",
+        db_path.to_string_lossy().replace('\\', "/")
+    );
 
     let store = Arc::new(EigenTuneStore::new(&db_url).await.unwrap());
     let collector = EigenTuneCollector::new(store.clone(), true);
@@ -214,8 +222,12 @@ async fn proof_01_real_data_collection() {
     }
 
     // Verify SQLite file exists and has data
-    let db_size = std::fs::metadata(db_path).unwrap().len();
-    println!("\nSQLite database: {} ({} bytes)", db_path, db_size);
+    let db_size = std::fs::metadata(&db_path).unwrap().len();
+    println!(
+        "\nSQLite database: {} ({} bytes)",
+        db_path.display(),
+        db_size
+    );
     assert!(db_size > 0);
 
     println!("\n✓ PROOF: Real data collected into real SQLite database\n");
@@ -261,8 +273,9 @@ async fn proof_02_chatml_jsonl_export() {
             .unwrap();
     }
 
-    // Export as ChatML JSONL
-    let export_path = "/tmp/eigentune_training_data.jsonl";
+    // Export as ChatML JSONL — use the OS temp dir so Windows (which has no
+    // `/tmp`) gets a valid writable path too.
+    let export_path = std::env::temp_dir().join("eigentune_training_data.jsonl");
     let pairs = store.get_pairs_for_tier("simple", 0.0).await.unwrap();
     let all_pairs = {
         let mut all = pairs;
@@ -273,7 +286,7 @@ async fn proof_02_chatml_jsonl_export() {
 
     println!("Exporting {} pairs to ChatML JSONL...\n", all_pairs.len());
 
-    let mut file = std::fs::File::create(export_path).unwrap();
+    let mut file = std::fs::File::create(&export_path).unwrap();
     use std::io::Write;
 
     for pair in &all_pairs {
@@ -289,9 +302,13 @@ async fn proof_02_chatml_jsonl_export() {
     }
 
     // Validate the exported file
-    let content = std::fs::read_to_string(export_path).unwrap();
+    let content = std::fs::read_to_string(&export_path).unwrap();
     let lines: Vec<&str> = content.trim().lines().collect();
-    println!("Exported {} lines to {}\n", lines.len(), export_path);
+    println!(
+        "Exported {} lines to {}\n",
+        lines.len(),
+        export_path.display()
+    );
 
     // Validate each line is valid ChatML
     let mut valid_count = 0;
