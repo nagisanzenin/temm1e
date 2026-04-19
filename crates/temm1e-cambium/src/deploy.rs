@@ -47,6 +47,34 @@ const BUILD_TIMEOUT_SECS: u64 = 600;
 /// Maximum seconds for `--version` health check.
 const VERSION_TIMEOUT_SECS: u64 = 10;
 
+/// Maximum retries on Linux `ETXTBSY` (os error 26) when spawning a freshly-
+/// written binary. Linux's `exec(2)` briefly sees an open write fd on a file
+/// that was just closed by another thread (tokio blocking-pool close, kernel
+/// writeback, or tmpfs metadata lag under CI load), returning `ETXTBSY`.
+/// The file is genuinely executable — a short retry with backoff clears the
+/// race in practice. Windows / macOS never hit this path because their
+/// respective error numbers and semantics differ.
+const ETXTBSY_MAX_RETRIES: u8 = 8;
+/// Backoff base for `ETXTBSY` retry: 20ms, 40ms, 80ms, ... capped at 320ms.
+const ETXTBSY_RETRY_BASE_MS: u64 = 20;
+
+/// Return `true` if `err` is the Linux `ETXTBSY` ("Text file busy") race on
+/// exec(). Returns `false` on non-Linux targets (Windows / macOS don't hit
+/// this condition with the same errno).
+fn is_etxtbsy(err: &std::io::Error) -> bool {
+    // Linux: raw errno 26. macOS/BSD use different numbering and don't hit
+    // this race for freshly-written executables. Windows has no analogue.
+    #[cfg(target_os = "linux")]
+    {
+        err.raw_os_error() == Some(26)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = err;
+        false
+    }
+}
+
 /// Configuration for a deployment session.
 #[derive(Debug, Clone)]
 pub struct DeployConfig {
@@ -299,13 +327,39 @@ impl Deployer {
         }
 
         // Run `--version` to verify it's an actual executable that runs.
-        let output = timeout(
-            Duration::from_secs(VERSION_TIMEOUT_SECS),
-            Command::new(source).arg("--version").output(),
-        )
-        .await
-        .map_err(|_| format!("--version timed out after {VERSION_TIMEOUT_SECS}s"))?
-        .map_err(|e| format!("Failed to spawn {}: {e}", source.display()))?;
+        // Retry on Linux ETXTBSY — a freshly-written binary may still have
+        // an open write fd on another thread when we exec() it. See
+        // `is_etxtbsy` for full context.
+        let mut output_result: std::io::Result<std::process::Output> =
+            Err(std::io::Error::other("retry loop entry"));
+        for attempt in 0..=ETXTBSY_MAX_RETRIES {
+            let timed = timeout(
+                Duration::from_secs(VERSION_TIMEOUT_SECS),
+                Command::new(source).arg("--version").output(),
+            )
+            .await;
+            let inner = match timed {
+                Ok(r) => r,
+                Err(_) => return Err(format!("--version timed out after {VERSION_TIMEOUT_SECS}s")),
+            };
+            output_result = inner;
+            match &output_result {
+                Ok(_) => break,
+                Err(e) if is_etxtbsy(e) && attempt < ETXTBSY_MAX_RETRIES => {
+                    let delay_ms = (ETXTBSY_RETRY_BASE_MS << attempt.min(4)).min(320);
+                    tracing::debug!(
+                        attempt = attempt + 1,
+                        delay_ms,
+                        path = %source.display(),
+                        "ETXTBSY on --version spawn — retrying"
+                    );
+                    sleep(Duration::from_millis(delay_ms)).await;
+                }
+                Err(_) => break,
+            }
+        }
+        let output =
+            output_result.map_err(|e| format!("Failed to spawn {}: {e}", source.display()))?;
 
         if !output.status.success() {
             return Err(format!(
@@ -489,13 +543,49 @@ impl Deployer {
             .ok_or_else(|| "start_new called without a pid_file".to_string())?;
 
         // Spawn detached: redirect stdout/stderr to /dev/null.
-        let mut child = std::process::Command::new(&self.config.installed_binary)
-            .arg("start")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .stdin(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn new binary: {e}"))?;
+        // Retry on Linux ETXTBSY — the binary was just swapped in and the
+        // kernel may briefly observe an open write fd from the copy. See
+        // `is_etxtbsy` for full context.
+        let mut child = {
+            let mut last_err: Option<std::io::Error> = None;
+            let mut spawned: Option<std::process::Child> = None;
+            for attempt in 0..=ETXTBSY_MAX_RETRIES {
+                let result = std::process::Command::new(&self.config.installed_binary)
+                    .arg("start")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .stdin(std::process::Stdio::null())
+                    .spawn();
+                match result {
+                    Ok(c) => {
+                        spawned = Some(c);
+                        break;
+                    }
+                    Err(e) if is_etxtbsy(&e) && attempt < ETXTBSY_MAX_RETRIES => {
+                        let delay_ms = (ETXTBSY_RETRY_BASE_MS << attempt.min(4)).min(320);
+                        tracing::debug!(
+                            attempt = attempt + 1,
+                            delay_ms,
+                            path = %self.config.installed_binary.display(),
+                            "ETXTBSY on start spawn — retrying"
+                        );
+                        sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        break;
+                    }
+                }
+            }
+            spawned.ok_or_else(|| {
+                format!(
+                    "Failed to spawn new binary: {}",
+                    last_err
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "unknown".into())
+                )
+            })?
+        };
 
         let pid = child.id();
 
