@@ -103,12 +103,54 @@ impl OpenAICompatProvider {
     ) -> Result<serde_json::Value, Temm1eError> {
         let mut messages: Vec<serde_json::Value> = Vec::new();
 
-        // System message goes first. P2: flatten base + volatile since the
-        // OpenAI-compat API doesn't support per-block cache_control.
+        // Consolidate ALL system content into a single leading system message.
+        // The OpenAI Chat Completions spec expects one system message at the
+        // top; MiniMax and Gemini's OpenAI-compat endpoint strictly enforce
+        // this (MiniMax returns error 2013 "invalid message role: system"
+        // when extra system entries appear mid-conversation). OpenAI/Grok/
+        // OpenRouter accept multi-system leniently today but the spec is
+        // single-leading-system — consolidating is strictly more correct.
+        //
+        // Sources of system content:
+        //   1. `request.system_flattened()` — the base prompt + volatile tail
+        //   2. Any `Role::System` messages inside `request.messages` — these
+        //      are injected by the agent context (λ-memory, blueprints,
+        //      knowledge, learnings, chat digest, dropped-history summary,
+        //      DONE criteria). See crates/temm1e-agent/src/context.rs.
+        //
+        // GH-59: memory-driven injections accumulated mid-list system
+        // entries that MiniMax rejected once memory had built up. Anthropic
+        // (anthropic.rs:94) and Gemini native (gemini.rs:190) already
+        // consolidate this way; this brings OpenAI-compat to parity.
+        let mut system_parts: Vec<String> = Vec::new();
         if let Some(system) = request.system_flattened() {
+            if !system.is_empty() {
+                system_parts.push(system);
+            }
+        }
+        for msg in &request.messages {
+            if !matches!(msg.role, Role::System) {
+                continue;
+            }
+            let text = match &msg.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Parts(parts) => parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            if !text.is_empty() {
+                system_parts.push(text);
+            }
+        }
+        if !system_parts.is_empty() {
             messages.push(serde_json::json!({
                 "role": "system",
-                "content": system,
+                "content": system_parts.join("\n\n"),
             }));
         }
 
@@ -117,6 +159,11 @@ impl OpenAICompatProvider {
         let tool_name_map = build_tool_name_map(&request.messages);
 
         for msg in &request.messages {
+            // System messages were consolidated above — skip them here so we
+            // never emit `role: system` mid-conversation.
+            if matches!(msg.role, Role::System) {
+                continue;
+            }
             let converted = convert_message_to_openai(msg, &tool_name_map)?;
             // Tool messages may be returned as a JSON array when there are
             // multiple ToolResult parts (DF-15 fix).
@@ -1375,6 +1422,122 @@ mod tests {
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[0]["content"], "Be concise");
+        assert_eq!(msgs[1]["role"], "user");
+    }
+
+    /// GH-59 regression: mid-list `Role::System` messages (from λ-memory,
+    /// blueprints, knowledge, digests, etc.) must be consolidated into a
+    /// single leading system message. MiniMax rejects multi-system with
+    /// error 2013; OpenAI/Grok tolerate it but the spec is single-leading.
+    #[test]
+    fn build_request_body_consolidates_multiple_system_messages() {
+        let provider = OpenAICompatProvider::new("key".to_string());
+        let request = CompletionRequest {
+            model: "MiniMax-M2.5".to_string(),
+            messages: vec![
+                ChatMessage {
+                    role: Role::System,
+                    content: MessageContent::Text("[Dropped-history summary]".to_string()),
+                },
+                ChatMessage {
+                    role: Role::System,
+                    content: MessageContent::Text("Blueprint: python-debug".to_string()),
+                },
+                ChatMessage {
+                    role: Role::System,
+                    content: MessageContent::Text("λ-memory: user prefers TS".to_string()),
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Text("hello".to_string()),
+                },
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text("hi".to_string()),
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Text("follow up".to_string()),
+                },
+            ],
+            tools: Vec::new(),
+            max_tokens: None,
+            temperature: None,
+            system: Some("You are Tem.".to_string()),
+            system_volatile: Some("Current mode: coding.".to_string()),
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+
+        // Exactly one `system` role, at index 0
+        let system_count = msgs.iter().filter(|m| m["role"] == "system").count();
+        assert_eq!(
+            system_count, 1,
+            "expected exactly one system message, got {system_count}: {msgs:?}"
+        );
+        assert_eq!(msgs[0]["role"], "system");
+
+        // Base, volatile, and all three mid-list System messages must be
+        // present in the merged content (write-order preserved).
+        let content = msgs[0]["content"].as_str().unwrap();
+        assert!(content.contains("You are Tem."), "base missing: {content}");
+        assert!(
+            content.contains("Current mode: coding."),
+            "volatile missing: {content}"
+        );
+        assert!(
+            content.contains("[Dropped-history summary]"),
+            "summary missing: {content}"
+        );
+        assert!(
+            content.contains("Blueprint: python-debug"),
+            "blueprint missing: {content}"
+        );
+        assert!(
+            content.contains("λ-memory: user prefers TS"),
+            "lambda missing: {content}"
+        );
+
+        // Mid-list user/assistant ordering must be preserved, no `system`
+        // roles leak into positions 1..N.
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[1]["content"], "hello");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[3]["role"], "user");
+        assert_eq!(msgs[3]["content"], "follow up");
+    }
+
+    /// System-only consolidation still works when `request.system` is None
+    /// and the only system content comes from mid-list `Role::System`.
+    #[test]
+    fn build_request_body_merges_midlist_system_when_base_absent() {
+        let provider = OpenAICompatProvider::new("key".to_string());
+        let request = CompletionRequest {
+            model: "MiniMax-M2.5".to_string(),
+            messages: vec![
+                ChatMessage {
+                    role: Role::System,
+                    content: MessageContent::Text("only-system".to_string()),
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Text("hi".to_string()),
+                },
+            ],
+            tools: Vec::new(),
+            max_tokens: None,
+            temperature: None,
+            system: None,
+            system_volatile: None,
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        let system_count = msgs.iter().filter(|m| m["role"] == "system").count();
+        assert_eq!(system_count, 1);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "only-system");
         assert_eq!(msgs[1]["role"], "user");
     }
 
