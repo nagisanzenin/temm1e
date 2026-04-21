@@ -207,6 +207,10 @@ pub struct AppState {
     pub pending_user_message: Option<String>,
     /// API key from onboarding, held for async validation/save.
     pub onboarding_api_key: Option<String>,
+    /// Custom base_url captured during onboarding for providers with
+    /// user-supplied endpoints (openai-compatible, ollama, lmstudio).
+    /// Forwarded to validate_provider_key, save_credentials, and spawn_agent.
+    pub onboarding_base_url: Option<String>,
 
     // Exit — Ctrl+C twice like Claude Code
     pub last_ctrl_c: Option<std::time::Instant>,
@@ -258,6 +262,7 @@ impl AppState {
             onboarding_step: OnboardingStep::Welcome,
             pending_user_message: None,
             onboarding_api_key: None,
+            onboarding_base_url: None,
             last_ctrl_c: None,
             needs_redraw: true,
             needs_clear: false,
@@ -953,6 +958,55 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
             KeyCode::Down => select.move_down(),
             KeyCode::Enter => {
                 if let Some(provider) = select.selected_value().cloned() {
+                    state.current_provider = Some(provider.clone());
+                    state.onboarding_base_url = None;
+                    if steps::provider_needs_base_url(&provider) {
+                        let prefill = steps::default_base_url_for_provider(&provider)
+                            .unwrap_or("")
+                            .to_string();
+                        state.onboarding_step = OnboardingStep::EnterBaseUrl {
+                            provider,
+                            input: prefill,
+                            error: None,
+                        };
+                    } else {
+                        state.onboarding_step = OnboardingStep::EnterApiKey {
+                            provider,
+                            input: String::new(),
+                            error: None,
+                        };
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                let items = steps::mode_select_items();
+                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
+            }
+            _ => {}
+        },
+        OnboardingStep::EnterBaseUrl {
+            provider,
+            input,
+            error,
+        } => match key.code {
+            KeyCode::Char(c) => {
+                input.push(c);
+                *error = None;
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Enter => {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    *error = Some(
+                        "Please enter a base URL (e.g. http://localhost:11434/v1)".to_string(),
+                    );
+                } else if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+                    *error = Some("URL must start with http:// or https://".to_string());
+                } else {
+                    let provider = provider.clone();
+                    state.onboarding_base_url = Some(trimmed.to_string());
                     state.onboarding_step = OnboardingStep::EnterApiKey {
                         provider,
                         input: String::new(),
@@ -961,8 +1015,8 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
                 }
             }
             KeyCode::Esc => {
-                let items = steps::mode_select_items();
-                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
+                let items = steps::provider_select_items();
+                state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
             }
             _ => {}
         },
@@ -979,18 +1033,40 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
                 input.pop();
             }
             KeyCode::Enter => {
-                if input.is_empty() {
+                // Custom endpoints (local Ollama, LM Studio, generic proxies)
+                // often don't require a real API key. Accept any input
+                // including empty and forward to validation — validate_provider_key
+                // short-circuits for base_url.is_some() at agent_bridge.rs:728.
+                let custom_endpoint = state.onboarding_base_url.is_some();
+                if input.is_empty() && !custom_endpoint {
                     *error = Some("Please enter an API key".to_string());
                 } else {
                     let provider = provider.clone();
-                    state.onboarding_api_key = Some(input.clone());
+                    // Store a placeholder for custom endpoints with empty keys
+                    // so downstream save_credentials has something to persist.
+                    let key_value = if input.is_empty() && custom_endpoint {
+                        "none".to_string()
+                    } else {
+                        input.clone()
+                    };
+                    state.onboarding_api_key = Some(key_value);
                     state.onboarding_step = OnboardingStep::ValidatingKey { provider };
                     // Validation handled asynchronously by lib.rs event loop
                 }
             }
             KeyCode::Esc => {
-                let items = steps::provider_select_items();
-                state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
+                // Back to base_url step if we came from one, else provider select
+                if state.onboarding_base_url.is_some() {
+                    let prefill = state.onboarding_base_url.clone().unwrap_or_default();
+                    state.onboarding_step = OnboardingStep::EnterBaseUrl {
+                        provider: provider.clone(),
+                        input: prefill,
+                        error: None,
+                    };
+                } else {
+                    let items = steps::provider_select_items();
+                    state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
+                }
             }
             _ => {}
         },
@@ -1024,14 +1100,56 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
             }
             _ => {}
         },
+        OnboardingStep::EnterCustomModel {
+            provider,
+            input,
+            error,
+        } => match key.code {
+            KeyCode::Char(c) => {
+                input.push(c);
+                *error = None;
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Enter => {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    *error =
+                        Some("Please enter a model name (e.g. rwkv7, llama3.3:8b)".to_string());
+                } else {
+                    let provider = provider.clone();
+                    let model = trimmed.to_string();
+                    state.current_model = Some(model.clone());
+                    state.onboarding_step = OnboardingStep::Confirm { provider, model };
+                }
+            }
+            KeyCode::Esc => {
+                let provider = state.current_provider.clone().unwrap_or_default();
+                state.onboarding_step = OnboardingStep::EnterApiKey {
+                    provider,
+                    input: String::new(),
+                    error: None,
+                };
+            }
+            _ => {}
+        },
         OnboardingStep::Confirm { provider, model: _ } => match key.code {
             KeyCode::Enter => {
                 state.onboarding_step = OnboardingStep::Saving;
                 // Save will be handled asynchronously by the event loop
             }
             KeyCode::Esc => {
-                let items = steps::model_select_items(provider);
-                state.onboarding_step = OnboardingStep::SelectModel(SelectState::new(items));
+                if steps::provider_needs_custom_model(provider) {
+                    state.onboarding_step = OnboardingStep::EnterCustomModel {
+                        provider: provider.clone(),
+                        input: state.current_model.clone().unwrap_or_default(),
+                        error: None,
+                    };
+                } else {
+                    let items = steps::model_select_items(provider);
+                    state.onboarding_step = OnboardingStep::SelectModel(SelectState::new(items));
+                }
             }
             _ => {}
         },
@@ -1093,5 +1211,134 @@ mod tests {
         assert!(state.is_agent_working);
         assert_eq!(state.message_list.messages.len(), 1);
         assert_eq!(state.message_list.messages[0].role, MessageRole::User);
+    }
+
+    fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn select_provider(state: &mut AppState, value: &str) {
+        use crossterm::event::KeyCode;
+        let items = steps::provider_select_items();
+        let mut select = SelectState::new(items);
+        let idx = select
+            .items
+            .iter()
+            .position(|i| i.value == value)
+            .expect("provider preset exists");
+        select.selected = idx;
+        state.onboarding_step = OnboardingStep::SelectProvider(select);
+        handle_onboarding_key(state, key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn onboarding_vendor_preset_skips_base_url() {
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "anthropic");
+        assert!(matches!(
+            state.onboarding_step,
+            OnboardingStep::EnterApiKey { .. }
+        ));
+        assert!(state.onboarding_base_url.is_none());
+    }
+
+    #[test]
+    fn onboarding_custom_endpoint_enters_base_url_step() {
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "openai-compatible");
+        match &state.onboarding_step {
+            OnboardingStep::EnterBaseUrl {
+                provider, input, ..
+            } => {
+                assert_eq!(provider, "openai-compatible");
+                assert_eq!(input, ""); // openai-compatible has no default
+            }
+            other => panic!("expected EnterBaseUrl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn onboarding_ollama_prefills_local_base_url() {
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "ollama");
+        match &state.onboarding_step {
+            OnboardingStep::EnterBaseUrl { input, .. } => {
+                assert_eq!(input, "http://localhost:11434/v1");
+            }
+            other => panic!("expected EnterBaseUrl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn onboarding_base_url_validates_scheme() {
+        use crossterm::event::KeyCode;
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "openai-compatible");
+        // Type "foo" and press Enter — must error on scheme
+        for c in "foo".chars() {
+            handle_onboarding_key(&mut state, key(KeyCode::Char(c)));
+        }
+        handle_onboarding_key(&mut state, key(KeyCode::Enter));
+        match &state.onboarding_step {
+            OnboardingStep::EnterBaseUrl { error, .. } => {
+                assert!(error.as_ref().unwrap().contains("http"));
+            }
+            other => panic!("expected EnterBaseUrl with error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn onboarding_base_url_accepts_http_and_advances() {
+        use crossterm::event::KeyCode;
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "openai-compatible");
+        for c in "http://localhost:8000/v1".chars() {
+            handle_onboarding_key(&mut state, key(KeyCode::Char(c)));
+        }
+        handle_onboarding_key(&mut state, key(KeyCode::Enter));
+        assert!(matches!(
+            state.onboarding_step,
+            OnboardingStep::EnterApiKey { .. }
+        ));
+        assert_eq!(
+            state.onboarding_base_url.as_deref(),
+            Some("http://localhost:8000/v1")
+        );
+    }
+
+    #[test]
+    fn onboarding_empty_api_key_allowed_for_custom_endpoint() {
+        use crossterm::event::KeyCode;
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "ollama");
+        handle_onboarding_key(&mut state, key(KeyCode::Enter)); // accept prefilled base_url
+                                                                // Now on EnterApiKey; press Enter with empty input
+        handle_onboarding_key(&mut state, key(KeyCode::Enter));
+        assert!(matches!(
+            state.onboarding_step,
+            OnboardingStep::ValidatingKey { .. }
+        ));
+        assert_eq!(state.onboarding_api_key.as_deref(), Some("none"));
+    }
+
+    #[test]
+    fn onboarding_empty_api_key_rejected_for_vendor_preset() {
+        use crossterm::event::KeyCode;
+        let mut state = AppState::new().with_onboarding();
+        select_provider(&mut state, "anthropic");
+        handle_onboarding_key(&mut state, key(KeyCode::Enter));
+        // Still on EnterApiKey with error
+        match &state.onboarding_step {
+            OnboardingStep::EnterApiKey { error, .. } => {
+                assert!(error.is_some());
+            }
+            other => panic!("expected EnterApiKey with error, got {:?}", other),
+        }
     }
 }

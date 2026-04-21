@@ -135,14 +135,45 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
 
     // 3. Initialize app state + agent
     let mut agent_handle: Option<AgentHandle> = None;
-    let mut state = if let Some((provider, key, model)) = load_saved_credentials() {
-        // Try to spawn agent with saved credentials
+    // Priority: temm1e.toml [provider] > saved credentials > onboarding.
+    // Mirrors the `start` / `chat` command logic (src/main.rs:1987-2007)
+    // so the TUI honors the same config the other commands do.
+    let resolved: Option<(String, String, String, Option<String>)> = {
+        let config_creds: Option<(String, String, String, Option<String>)> = config
+            .provider
+            .api_key
+            .as_ref()
+            .filter(|k| !k.is_empty() && !k.starts_with("${"))
+            .map(|key| {
+                let name = config
+                    .provider
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "anthropic".to_string());
+                let model = config
+                    .provider
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| default_model(&name).to_string());
+                (name, key.clone(), model, config.provider.base_url.clone())
+            });
+
+        config_creds.or_else(|| {
+            load_saved_credentials().map(|(p, k, m)| {
+                let burl = load_active_provider_keys().and_then(|(_, _, _, b)| b);
+                (p, k, m, burl)
+            })
+        })
+    };
+
+    let mut state = if let Some((provider, key, model, base_url)) = resolved {
+        // Try to spawn agent with resolved credentials
         match agent_bridge::spawn_agent(
             AgentSetup {
                 provider_name: provider.clone(),
                 api_key: key,
                 model: model.clone(),
-                base_url: load_active_provider_keys().and_then(|(_, _, _, burl)| burl),
+                base_url,
                 config: config.clone(),
                 mode: None, // Use default when loading saved credentials
             },
@@ -357,14 +388,44 @@ async fn handle_onboarding_async(
         OnboardingStep::ValidatingKey { provider } => {
             if let Some(ref api_key) = state.onboarding_api_key.clone() {
                 let provider = provider.clone();
-                let model = default_model(&provider).to_string();
+                let base_url = state.onboarding_base_url.clone();
+                // For custom-endpoint providers the default_model may be empty
+                // (openai-compatible) — use a sentinel the validator accepts.
+                // validate_provider_key short-circuits for base_url.is_some()
+                // so the model string isn't actually sent anywhere.
+                let default_model_str = default_model(&provider).to_string();
+                let model_for_validation = if default_model_str.is_empty() {
+                    "custom".to_string()
+                } else {
+                    default_model_str
+                };
 
-                match validate_provider_key(&provider, api_key, &model, None).await {
+                match validate_provider_key(
+                    &provider,
+                    api_key,
+                    &model_for_validation,
+                    base_url.as_deref(),
+                )
+                .await
+                {
                     Ok(()) => {
                         state.current_provider = Some(provider.clone());
+                        // Providers that expose arbitrary models (openai-compatible,
+                        // any name with an empty model list) prompt for free-text
+                        // entry; everyone else gets the curated SelectModel list.
                         let items = model_select_items(&provider);
-                        state.onboarding_step =
-                            OnboardingStep::SelectModel(SelectState::new(items));
+                        if items.is_empty()
+                            || crate::onboarding::steps::provider_needs_custom_model(&provider)
+                        {
+                            state.onboarding_step = OnboardingStep::EnterCustomModel {
+                                provider,
+                                input: String::new(),
+                                error: None,
+                            };
+                        } else {
+                            state.onboarding_step =
+                                OnboardingStep::SelectModel(SelectState::new(items));
+                        }
                     }
                     Err(e) => {
                         state.onboarding_step = OnboardingStep::EnterApiKey {
@@ -385,15 +446,16 @@ async fn handle_onboarding_async(
                     .current_model
                     .clone()
                     .unwrap_or_else(|| default_model(provider).to_string());
+                let base_url = state.onboarding_base_url.clone();
 
-                match save_credentials(provider, api_key, &model, None).await {
+                match save_credentials(provider, api_key, &model, base_url.as_deref()).await {
                     Ok(()) => {
                         match agent_bridge::spawn_agent(
                             AgentSetup {
                                 provider_name: provider.clone(),
                                 api_key: api_key.clone(),
                                 model: model.clone(),
-                                base_url: None,
+                                base_url: base_url.clone(),
                                 config: config.clone(),
                                 mode: state.selected_mode.clone(),
                             },

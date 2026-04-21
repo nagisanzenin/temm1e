@@ -411,6 +411,10 @@ pub fn default_model(provider_name: &str) -> &'static str {
         // variant; users override it with `/addmodel <name> ...` as soon as
         // they pick their actual model. See issue #45.
         "lmstudio" => "qwen3.5-7b-instruct",
+        // Generic custom endpoint — model name must be supplied by the user
+        // (onboarding prompts for it; `/addmodel` sets it post-hoc). Empty
+        // sentinel signals callers to force user input.
+        "openai-compatible" => "",
         _ => "claude-sonnet-4-6",
     }
 }

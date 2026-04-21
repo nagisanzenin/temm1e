@@ -73,6 +73,52 @@ pub fn render_onboarding(step: &OnboardingStep, theme: &Theme, area: Rect, buf: 
             )));
             hint.render(chunks[2], buf);
         }
+        OnboardingStep::EnterBaseUrl {
+            provider,
+            input,
+            error,
+        } => {
+            let hint_line = match provider.as_str() {
+                "ollama" => {
+                    "  Local default: http://localhost:11434/v1  (cloud: https://ollama.com/v1)"
+                }
+                "lmstudio" => "  Local default: http://localhost:1234/v1",
+                "openai-compatible" => {
+                    "  Examples: http://localhost:8000/v1, https://proxy.example.com/v1"
+                }
+                _ => "",
+            };
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!(" Enter base URL for {}:", provider),
+                    theme.heading,
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  > ", theme.prompt),
+                    Span::styled(format!("{input}\u{2588}"), theme.text),
+                ]),
+            ];
+            if !hint_line.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(hint_line, theme.secondary)));
+            }
+            if let Some(err) = error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  \u{2717} {}", err),
+                    theme.error,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Enter confirm  Esc back",
+                theme.secondary,
+            )));
+            let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+            para.render(inner, buf);
+        }
         OnboardingStep::EnterApiKey {
             provider,
             input,
@@ -140,6 +186,43 @@ pub fn render_onboarding(step: &OnboardingStep, theme: &Theme, area: Rect, buf: 
                 )),
             ];
             let para = Paragraph::new(lines);
+            para.render(inner, buf);
+        }
+        OnboardingStep::EnterCustomModel {
+            provider,
+            input,
+            error,
+        } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!(" Enter model name for {}:", provider),
+                    theme.heading,
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  > ", theme.prompt),
+                    Span::styled(format!("{input}\u{2588}"), theme.text),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Examples: rwkv7, llama3.3:8b, mistral-7b-instruct",
+                    theme.secondary,
+                )),
+            ];
+            if let Some(err) = error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  \u{2717} {}", err),
+                    theme.error,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Enter confirm  Esc back",
+                theme.secondary,
+            )));
+            let para = Paragraph::new(lines).wrap(Wrap { trim: false });
             para.render(inner, buf);
         }
         OnboardingStep::SelectModel(state) => {
