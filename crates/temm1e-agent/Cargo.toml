@@ -36,5 +36,6 @@ thiserror.workspace = true
 temm1e-test-utils.workspace = true
 temm1e-tools.workspace = true
 temm1e-cambium.workspace = true
+temm1e-memory.workspace = true
 toml.workspace = true
 tempfile = "3"

@@ -3,6 +3,7 @@
 //! Provides mock implementations of core traits, factory helpers for test data,
 //! and a fluent config builder for test scenarios.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -124,6 +125,114 @@ impl Provider for MockProvider {
 
     async fn list_models(&self) -> Result<Vec<String>, Temm1eError> {
         Ok(vec!["mock-model".to_string()])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QueuedMockProvider — multi-response mock for multi-round agent tests
+// ---------------------------------------------------------------------------
+
+/// A mock provider that returns a queued sequence of responses, one per
+/// `complete()` call. Use this to test multi-round flows like the
+/// Self-Audit Pass (GH-62), where round 1 emits text-only and round 2
+/// emits the audit response.
+///
+/// If `complete()` is called more times than there are queued responses,
+/// it returns an error so test failures are loud rather than silent.
+pub struct QueuedMockProvider {
+    pub responses: Arc<Mutex<VecDeque<CompletionResponse>>>,
+    pub call_count: Arc<Mutex<usize>>,
+    pub captured_requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+impl QueuedMockProvider {
+    /// Create a queued mock provider with a fixed sequence of responses.
+    pub fn with_responses(responses: Vec<CompletionResponse>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+            call_count: Arc::new(Mutex::new(0)),
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Convenience: build a text-only response.
+    pub fn text_response(text: &str) -> CompletionResponse {
+        CompletionResponse {
+            id: "queued-text".to_string(),
+            content: vec![ContentPart::Text {
+                text: text.to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                cost_usd: 0.0,
+            },
+        }
+    }
+
+    /// Convenience: build a tool-use response.
+    pub fn tool_use_response(
+        tool_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+    ) -> CompletionResponse {
+        CompletionResponse {
+            id: "queued-tool".to_string(),
+            content: vec![ContentPart::ToolUse {
+                id: tool_id.to_string(),
+                name: tool_name.to_string(),
+                input,
+                thought_signature: None,
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 30,
+                cost_usd: 0.0,
+            },
+        }
+    }
+
+    pub async fn calls(&self) -> usize {
+        *self.call_count.lock().await
+    }
+}
+
+#[async_trait]
+impl Provider for QueuedMockProvider {
+    fn name(&self) -> &str {
+        "queued-mock"
+    }
+
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, Temm1eError> {
+        let mut count = self.call_count.lock().await;
+        *count += 1;
+        let mut reqs = self.captured_requests.lock().await;
+        reqs.push(request);
+        let mut q = self.responses.lock().await;
+        q.pop_front()
+            .ok_or_else(|| Temm1eError::Provider("QueuedMockProvider exhausted".to_string()))
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<BoxStream<'_, Result<StreamChunk, Temm1eError>>, Temm1eError> {
+        Err(Temm1eError::Provider(
+            "QueuedMockProvider does not implement stream".to_string(),
+        ))
+    }
+
+    async fn health_check(&self) -> Result<bool, Temm1eError> {
+        Ok(true)
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, Temm1eError> {
+        Ok(vec!["queued-mock-model".to_string()])
     }
 }
 

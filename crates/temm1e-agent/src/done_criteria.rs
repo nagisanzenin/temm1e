@@ -58,12 +58,19 @@ impl Default for DoneCriteria {
     }
 }
 
-/// Heuristic detection of compound (multi-step) tasks.
+/// Heuristic detection of compound (multi-step) tasks — FALLBACK ONLY.
+///
+/// PREFERRED: derive compound-ness from the LLM classifier's `difficulty`
+/// field (`Standard` or `Complex` ⇒ compound). This keyword-based version
+/// is retained only for the path where the v2 classifier is disabled or
+/// unavailable. It violates the "no keyword matching for semantic
+/// decisions" rule (`feedback_no_keyword_matching.md`) — kept as a graceful
+/// fallback rather than a default.
 ///
 /// Returns `true` if the user's message appears to request multiple distinct
 /// actions — e.g. contains "and" joining action verbs, numbered lists, or
 /// multiple imperative sentences.
-pub fn is_compound_task(text: &str) -> bool {
+pub fn is_compound_task_fallback(text: &str) -> bool {
     let trimmed = text.trim();
 
     // Very short messages are rarely compound
@@ -261,46 +268,46 @@ mod tests {
 
     #[test]
     fn is_compound_short_text_is_not_compound() {
-        assert!(!is_compound_task("read the file"));
-        assert!(!is_compound_task("hello"));
-        assert!(!is_compound_task(""));
+        assert!(!is_compound_task_fallback("read the file"));
+        assert!(!is_compound_task_fallback("hello"));
+        assert!(!is_compound_task_fallback(""));
     }
 
     #[test]
     fn is_compound_numbered_list() {
         let text =
             "Please do the following:\n1. Create a new file\n2. Write some content\n3. Save it";
-        assert!(is_compound_task(text));
+        assert!(is_compound_task_fallback(text));
     }
 
     #[test]
     fn is_compound_bulleted_list() {
         let text = "I need you to:\n- deploy the app\n- run the tests\n- send me the logs";
-        assert!(is_compound_task(text));
+        assert!(is_compound_task_fallback(text));
     }
 
     #[test]
     fn is_compound_action_verbs_with_and() {
         let text = "Deploy the application and run the migrations and verify the health check";
-        assert!(is_compound_task(text));
+        assert!(is_compound_task_fallback(text));
     }
 
     #[test]
     fn is_compound_action_verbs_with_then() {
         let text = "Build the project then deploy it to production";
-        assert!(is_compound_task(text));
+        assert!(is_compound_task_fallback(text));
     }
 
     #[test]
     fn is_compound_multiple_imperative_sentences() {
         let text = "Deploy the app. Run the tests. Send me the results.";
-        assert!(is_compound_task(text));
+        assert!(is_compound_task_fallback(text));
     }
 
     #[test]
     fn is_compound_single_action_is_not_compound() {
         let text = "Deploy the application to the production server";
-        assert!(!is_compound_task(text));
+        assert!(!is_compound_task_fallback(text));
     }
 
     #[test]

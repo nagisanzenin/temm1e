@@ -195,6 +195,28 @@ impl SqliteMemory {
         .await
         .map_err(|e| Temm1eError::Memory(format!("Failed to create skill_usage: {e}")))?;
 
+        // ── Model discipline table (GH-62, v5.6.0) ───────────────────
+        // Per-(provider, model) Self-Audit Pass telemetry. Observability
+        // only in v5.6.0; feeds adaptive auto-disable in v5.7.0+.
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS model_discipline (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                text_only_exits INTEGER NOT NULL DEFAULT 0,
+                audit_done_responses INTEGER NOT NULL DEFAULT 0,
+                audit_tool_call_responses INTEGER NOT NULL DEFAULT 0,
+                audit_failed_responses INTEGER NOT NULL DEFAULT 0,
+                audit_skipped INTEGER NOT NULL DEFAULT 0,
+                last_updated INTEGER NOT NULL,
+                PRIMARY KEY (provider, model)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("Failed to create model_discipline: {e}")))?;
+
         Ok(())
     }
 }
@@ -818,6 +840,81 @@ impl Memory for SqliteMemory {
             })
             .collect())
     }
+
+    async fn record_audit_outcome(
+        &self,
+        provider: &str,
+        model: &str,
+        outcome: temm1e_core::AuditOutcomeKind,
+        was_text_only: bool,
+    ) -> Result<(), Temm1eError> {
+        use temm1e_core::AuditOutcomeKind;
+        let now = chrono::Utc::now().timestamp();
+        // Increment one of: text_only_exits (always when was_text_only),
+        // and exactly one of the per-outcome columns.
+        let (done_inc, tool_inc, fail_inc, skip_inc) = match outcome {
+            AuditOutcomeKind::Done => (1, 0, 0, 0),
+            AuditOutcomeKind::ToolCallTriggered => (0, 1, 0, 0),
+            AuditOutcomeKind::FailedOpen => (0, 0, 1, 0),
+            AuditOutcomeKind::Skipped => (0, 0, 0, 1),
+        };
+        let text_only_inc: i64 = if was_text_only { 1 } else { 0 };
+
+        sqlx::query(
+            "INSERT INTO model_discipline \
+                (provider, model, text_only_exits, audit_done_responses, \
+                 audit_tool_call_responses, audit_failed_responses, audit_skipped, last_updated) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(provider, model) DO UPDATE SET \
+                text_only_exits = text_only_exits + ?3, \
+                audit_done_responses = audit_done_responses + ?4, \
+                audit_tool_call_responses = audit_tool_call_responses + ?5, \
+                audit_failed_responses = audit_failed_responses + ?6, \
+                audit_skipped = audit_skipped + ?7, \
+                last_updated = ?8",
+        )
+        .bind(provider)
+        .bind(model)
+        .bind(text_only_inc)
+        .bind(done_inc as i64)
+        .bind(tool_inc as i64)
+        .bind(fail_inc as i64)
+        .bind(skip_inc as i64)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("record_audit_outcome: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn get_model_discipline(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<Option<temm1e_core::ModelDiscipline>, Temm1eError> {
+        let row: Option<ModelDisciplineRow> = sqlx::query_as(
+            "SELECT provider, model, text_only_exits, audit_done_responses, \
+                    audit_tool_call_responses, audit_failed_responses, audit_skipped, last_updated \
+             FROM model_discipline WHERE provider = ?1 AND model = ?2",
+        )
+        .bind(provider)
+        .bind(model)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Temm1eError::Memory(format!("get_model_discipline: {e}")))?;
+
+        Ok(row.map(|r| temm1e_core::ModelDiscipline {
+            provider: r.provider,
+            model: r.model,
+            text_only_exits: r.text_only_exits as u64,
+            audit_done_responses: r.audit_done_responses as u64,
+            audit_tool_call_responses: r.audit_tool_call_responses as u64,
+            audit_failed_responses: r.audit_failed_responses as u64,
+            audit_skipped: r.audit_skipped as u64,
+            last_updated: r.last_updated as u64,
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -939,6 +1036,18 @@ struct SkillUsageRow {
     skill_name: String,
     invocations: i32,
     last_invoked_at: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct ModelDisciplineRow {
+    provider: String,
+    model: String,
+    text_only_exits: i64,
+    audit_done_responses: i64,
+    audit_tool_call_responses: i64,
+    audit_failed_responses: i64,
+    audit_skipped: i64,
+    last_updated: i64,
 }
 
 fn str_to_entry_type(s: &str) -> Result<MemoryEntryType, Temm1eError> {
@@ -1266,5 +1375,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(history.len(), 20);
+    }
+
+    // ── Model discipline (GH-62) ──────────────────────────────────
+
+    #[tokio::test]
+    async fn record_audit_outcome_increments_correct_counter() {
+        use temm1e_core::AuditOutcomeKind;
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        let p = "openai-compat";
+        let m = "qwen3-27b";
+
+        mem.record_audit_outcome(p, m, AuditOutcomeKind::Done, true)
+            .await
+            .unwrap();
+        mem.record_audit_outcome(p, m, AuditOutcomeKind::Done, true)
+            .await
+            .unwrap();
+        mem.record_audit_outcome(p, m, AuditOutcomeKind::ToolCallTriggered, true)
+            .await
+            .unwrap();
+        mem.record_audit_outcome(p, m, AuditOutcomeKind::FailedOpen, true)
+            .await
+            .unwrap();
+        mem.record_audit_outcome(p, m, AuditOutcomeKind::Skipped, false)
+            .await
+            .unwrap();
+
+        let d = mem
+            .get_model_discipline(p, m)
+            .await
+            .unwrap()
+            .expect("row should exist");
+        assert_eq!(d.text_only_exits, 4);
+        assert_eq!(d.audit_done_responses, 2);
+        assert_eq!(d.audit_tool_call_responses, 1);
+        assert_eq!(d.audit_failed_responses, 1);
+        assert_eq!(d.audit_skipped, 1);
+        assert!(d.last_updated > 0);
+    }
+
+    #[tokio::test]
+    async fn get_model_discipline_returns_none_for_unseen() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        let d = mem.get_model_discipline("never", "seen").await.unwrap();
+        assert!(d.is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_audit_record_safe() {
+        use temm1e_core::AuditOutcomeKind;
+        let mem = std::sync::Arc::new(SqliteMemory::new("sqlite::memory:").await.unwrap());
+        let mut handles = Vec::new();
+        for _ in 0..20 {
+            let mem = mem.clone();
+            handles.push(tokio::spawn(async move {
+                mem.record_audit_outcome("p", "m", AuditOutcomeKind::Done, true)
+                    .await
+            }));
+        }
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+        let d = mem.get_model_discipline("p", "m").await.unwrap().unwrap();
+        assert_eq!(d.text_only_exits, 20);
+        assert_eq!(d.audit_done_responses, 20);
     }
 }

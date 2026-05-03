@@ -501,6 +501,7 @@ pub async fn spawn_agent(
         setup.config.agent.max_spend_usd,
     )
     .with_v2_optimizations(setup.config.agent.v2_optimizations)
+    .with_self_audit_enabled(setup.config.agent.self_audit_enabled)
     .with_parallel_phases(setup.config.agent.parallel_phases)
     .with_hive_enabled(tui_hive_enabled)
     .with_shared_mode(shared_mode.clone())

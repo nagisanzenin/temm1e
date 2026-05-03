@@ -225,6 +225,34 @@ pub trait Memory: Send + Sync {
     async fn get_skill_usage(&self) -> Result<Vec<SkillUsageRecord>, Temm1eError> {
         Ok(Vec::new())
     }
+
+    // ── Model discipline (GH-62, v5.6.0) ──────────────────────────
+    // Per-(provider, model) telemetry for the Self-Audit Pass:
+    // counts how often each model exits via text-only and how the
+    // audit verdicts break down. Observability-only in v5.6.0; feeds
+    // adaptive auto-disable in v5.7.0+.
+
+    /// Record one outcome of the Self-Audit gate for a (provider, model).
+    /// `was_text_only` distinguishes "audit ran" (true) from "audit was
+    /// skipped because the turn ended via tool calls" (false).
+    async fn record_audit_outcome(
+        &self,
+        _provider: &str,
+        _model: &str,
+        _outcome: AuditOutcomeKind,
+        _was_text_only: bool,
+    ) -> Result<(), Temm1eError> {
+        Ok(())
+    }
+
+    /// Fetch the discipline counters for one (provider, model) pair.
+    async fn get_model_discipline(
+        &self,
+        _provider: &str,
+        _model: &str,
+    ) -> Result<Option<ModelDiscipline>, Temm1eError> {
+        Ok(None)
+    }
 }
 
 // ── Self-learning record types (v4.6.0) ───────────────────────────
@@ -266,4 +294,53 @@ pub struct SkillUsageRecord {
     pub skill_name: String,
     pub invocations: u32,
     pub last_invoked_at: u64,
+}
+
+/// Outcome categories for the Self-Audit Pass (GH-62).
+///
+/// Recorded per (provider, model) so v5.7.0+ can adaptively disable the
+/// audit for models that prove disciplined, and force-enable it for
+/// models that prove undisciplined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuditOutcomeKind {
+    /// Model confirmed completion with the [DONE] marker — the original
+    /// pre-audit text is the user-facing reply.
+    Done,
+    /// Audit prompted the model to emit the tool call it had previously
+    /// promised but skipped — the loop continues.
+    ToolCallTriggered,
+    /// Audit response was malformed (no [DONE], no tool call). Fail-open:
+    /// loop exits with the original text. No worse than baseline.
+    FailedOpen,
+    /// Audit was eligible but skipped (cost cap, hard cap reached, etc.).
+    Skipped,
+}
+
+/// Aggregated Self-Audit telemetry for one (provider, model).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDiscipline {
+    pub provider: String,
+    pub model: String,
+    /// Total turns where the loop reached the audit branch (text-only with
+    /// tools available) — i.e. the audit COULD have run.
+    pub text_only_exits: u64,
+    pub audit_done_responses: u64,
+    pub audit_tool_call_responses: u64,
+    pub audit_failed_responses: u64,
+    pub audit_skipped: u64,
+    pub last_updated: u64,
+}
+
+impl ModelDiscipline {
+    /// How often, on text-only exits, the audit caught a stalled promise.
+    /// Higher means the model is undisciplined and benefits from auditing.
+    pub fn stall_catch_rate(&self) -> f64 {
+        let audited = self.audit_done_responses
+            + self.audit_tool_call_responses
+            + self.audit_failed_responses;
+        if audited == 0 {
+            return 0.0;
+        }
+        self.audit_tool_call_responses as f64 / audited as f64
+    }
 }

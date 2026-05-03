@@ -293,6 +293,11 @@ pub struct AgentRuntime {
     ///
     /// Used by JIT swarm workers to exclude `spawn_swarm` (recursion block).
     tool_filter: Option<ToolFilter>,
+    /// Self-Audit Pass (GH-62). When true, the loop runs one extra audit
+    /// round on text-only exits with tools available, to catch stalled-
+    /// promise turns from weaker tool-calling models. Hard cap: 1 audit
+    /// per turn. Default: false (opt-in for v5.6.0).
+    self_audit_enabled: bool,
 }
 
 impl AgentRuntime {
@@ -346,6 +351,7 @@ impl AgentRuntime {
             cambium_trust: None,
             auto_seal_planner_oath: false,
             tool_filter: None,
+            self_audit_enabled: false,
         }
     }
 
@@ -421,6 +427,26 @@ impl AgentRuntime {
     /// impossible.
     pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
         self.tool_filter = Some(filter);
+        self
+    }
+
+    /// Enable the Self-Audit Pass (GH-62).
+    ///
+    /// When enabled, the loop runs one extra audit round whenever it would
+    /// otherwise exit via "no tool call ⇒ done" AND tools were available
+    /// AND the model produced text. The audit asks the same model to either
+    /// confirm completion (`[DONE]`) or commit to the tool call it skipped.
+    ///
+    /// Hard cap of 1 audit per turn — bounded cost. Fail-open on malformed
+    /// audit responses (degrades to today's baseline).
+    ///
+    /// Per the One Model Rule (`feedback_one_model_rule.md`), the audit
+    /// uses the same active provider+model as the main loop.
+    pub fn with_self_audit_enabled(mut self, enabled: bool) -> Self {
+        self.self_audit_enabled = enabled;
+        if enabled {
+            tracing::info!("Self-Audit Pass enabled (1-audit-per-turn cap)");
+        }
         self
     }
 
@@ -503,6 +529,7 @@ impl AgentRuntime {
             cambium_trust: None,
             auto_seal_planner_oath: false,
             tool_filter: None,
+            self_audit_enabled: false,
         }
     }
 
@@ -754,6 +781,10 @@ impl AgentRuntime {
         // Tem Conscious: observation accumulators (collected during the turn)
         let mut classification_label = String::new();
         let mut difficulty_label = String::new();
+        // Phase C (GH-62): compound-task signal derived from the existing
+        // classifier's difficulty field. None means "classifier didn't run
+        // or didn't reach a verdict" — fall back to the keyword heuristic.
+        let mut classifier_compound: Option<bool> = None;
         // Eigen-Tune complexity tier (set by classifier below).
         // String form of EigenTier: "simple"|"standard"|"complex". Defaults to
         // "standard" if neither classification path runs (e.g., when
@@ -1074,6 +1105,14 @@ impl AgentRuntime {
                     // Tem Conscious: capture classification for observation
                     classification_label = format!("{:?}", classification.category);
                     difficulty_label = format!("{:?}", classification.difficulty);
+                    // Phase C (GH-62): derive compound-task flag from the
+                    // classifier's difficulty rather than keyword matching.
+                    // Standard or Complex ⇒ compound; Simple ⇒ not compound.
+                    classifier_compound = Some(matches!(
+                        classification.difficulty,
+                        crate::llm_classifier::TaskDifficulty::Standard
+                            | crate::llm_classifier::TaskDifficulty::Complex
+                    ));
 
                     match classification.category {
                         crate::llm_classifier::MessageCategory::Chat => {
@@ -1183,6 +1222,13 @@ impl AgentRuntime {
                         crate::model_router::TaskComplexity::Complex => "complex",
                     }
                     .to_string();
+                    // Phase C (GH-62): derive compound from rule-based
+                    // fallback complexity when LLM classifier failed.
+                    classifier_compound = Some(matches!(
+                        complexity,
+                        crate::model_router::TaskComplexity::Standard
+                            | crate::model_router::TaskComplexity::Complex
+                    ));
 
                     let profile = complexity.execution_profile();
                     info!(
@@ -1200,7 +1246,12 @@ impl AgentRuntime {
         // ── DONE Definition Engine ─────────────────────────────────
         // Detect compound tasks and inject a DONE criteria prompt so
         // the LLM articulates verifiable completion conditions.
-        let is_compound = done_criteria::is_compound_task(&user_text);
+        // Phase C (GH-62): prefer the LLM classifier's difficulty signal
+        // (set above for both v2 LLM path and rule-based fallback).
+        // Fall back to the keyword heuristic only when the classifier is
+        // entirely disabled (v2_optimizations = false).
+        let is_compound = classifier_compound
+            .unwrap_or_else(|| done_criteria::is_compound_task_fallback(&user_text));
         let mut _done_criteria = DoneCriteria::new();
 
         if is_compound {
@@ -1285,6 +1336,12 @@ impl AgentRuntime {
         // Track if send_message tool was used — suppresses the final reply
         // to avoid duplicating content already delivered to the user.
         let mut send_message_used = false;
+        // Self-Audit (GH-62): hard cap of 1 audit per turn. When the
+        // gate triggers, we cache the pre-audit text so the post-audit
+        // exit can serve THAT text to the user instead of leaking the
+        // raw "[DONE]" token.
+        let mut audits_used_this_turn: u8 = 0;
+        let mut pending_audit_pre_text: Option<String> = None;
         loop {
             rounds += 1;
 
@@ -2008,6 +2065,87 @@ impl AgentRuntime {
 
             // If no tool calls, we have our final reply
             if tool_uses.is_empty() {
+                // ── Self-Audit gate (GH-62) ──────────────────────────
+                // When enabled AND the model produced text AND tools
+                // were available AND this is the first audit this turn:
+                // run one verification round. The same model is asked
+                // to confirm completion ("[DONE]") or commit to the tool
+                // call it skipped. Anything else fails open — exits
+                // with the original text, identical to v5.5.5 baseline.
+                let should_audit = self.self_audit_enabled
+                    && audits_used_this_turn == 0
+                    && pending_audit_pre_text.is_none()
+                    && !effective_tools.is_empty()
+                    && !text_parts.is_empty()
+                    && !send_message_used
+                    // Cost-cap: skip audit if it would push past the budget.
+                    // Estimate audit cost as ~20% of the turn's cost so far.
+                    && (self.budget.max_spend_usd() == 0.0
+                        || self.budget.total_spend_usd() + (turn_cost_usd * 0.2)
+                            < self.budget.max_spend_usd());
+
+                if should_audit {
+                    let pre_audit_text = text_parts.join("\n");
+                    info!("Self-Audit: triggering one audit round");
+
+                    // Record the pre-audit assistant turn so the model
+                    // sees what it just said when it processes the
+                    // synthetic audit message on the next round.
+                    if prompted_mode {
+                        session.history.push(ChatMessage {
+                            role: Role::Assistant,
+                            content: MessageContent::Text(if pre_audit_text.is_empty() {
+                                "(no text)".to_string()
+                            } else {
+                                pre_audit_text.clone()
+                            }),
+                        });
+                    } else {
+                        session.history.push(ChatMessage {
+                            role: Role::Assistant,
+                            content: MessageContent::Parts(response.content.clone()),
+                        });
+                    }
+
+                    // Push the synthetic audit message — tagged with the
+                    // marker prefix so it's filterable from display.
+                    session
+                        .history
+                        .push(crate::self_audit::format_audit_message(&pre_audit_text));
+
+                    audits_used_this_turn += 1;
+                    pending_audit_pre_text = Some(pre_audit_text);
+                    continue;
+                }
+
+                // ── Post-audit cleanup ───────────────────────────────
+                // If we reach here AFTER an audit triggered, the current
+                // text_parts is the audit response (e.g. "[DONE]" or
+                // some malformed text). Replace it with the cached
+                // pre-audit text so the user never sees the marker, and
+                // record the telemetry.
+                if let Some(pre_text) = pending_audit_pre_text.take() {
+                    let outcome = crate::self_audit::classify_audit_response(&text_parts, false);
+                    info!(outcome = ?outcome, "Self-Audit: round complete");
+                    // Fire-and-forget telemetry (Phase E).
+                    let mem = Arc::clone(&self.memory);
+                    let provider_name = self.provider.name().to_string();
+                    let model_name = self.model.clone();
+                    let outcome_kind = outcome.to_kind();
+                    tokio::spawn(async move {
+                        if let Err(e) = mem
+                            .record_audit_outcome(&provider_name, &model_name, outcome_kind, true)
+                            .await
+                        {
+                            tracing::debug!(error = %e, "audit telemetry record failed");
+                        }
+                    });
+                    // Always serve the pre-audit text — never leak the
+                    // [DONE] token or the audit's malformed response.
+                    text_parts.clear();
+                    text_parts.push(pre_text);
+                }
+
                 // P5: log outcome-derived difficulty alongside intent-based label.
                 // This is strictly more informative signal — reflects what actually
                 // happened, not what the classifier predicted would happen. Kept as
@@ -2510,6 +2648,30 @@ impl AgentRuntime {
                     role: Role::Assistant,
                     content: MessageContent::Parts(response.content.clone()),
                 });
+            }
+
+            // ── Self-Audit (GH-62): post-audit tool-call path ────
+            // The audit triggered AND the model emitted a tool call.
+            // That tool will run normally. Drop the cached pre-audit
+            // text so any later natural exit serves the FRESH final
+            // text instead of stale pre-audit content; record the
+            // ToolCallTriggered telemetry now since the audit is done.
+            if pending_audit_pre_text.is_some() {
+                let outcome = crate::self_audit::AuditOutcome::ToolCallTriggered;
+                info!(outcome = ?outcome, "Self-Audit: round complete");
+                let mem = Arc::clone(&self.memory);
+                let provider_name = self.provider.name().to_string();
+                let model_name = self.model.clone();
+                let outcome_kind = outcome.to_kind();
+                tokio::spawn(async move {
+                    if let Err(e) = mem
+                        .record_audit_outcome(&provider_name, &model_name, outcome_kind, true)
+                        .await
+                    {
+                        tracing::debug!(error = %e, "audit telemetry record failed");
+                    }
+                });
+                pending_audit_pre_text = None;
             }
 
             // Execute each tool call and collect results

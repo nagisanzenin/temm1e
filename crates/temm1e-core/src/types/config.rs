@@ -857,6 +857,19 @@ pub struct AgentConfig {
     /// This field is retained for config compatibility only.
     #[serde(default)]
     pub parallel_phases: bool,
+    /// Self-Audit Pass (GH-62, v5.6.0). When `true`, the agent loop runs
+    /// one extra audit round whenever it would otherwise exit via the
+    /// "no tool call ⇒ done" path AND tools were available — to catch
+    /// stalled-promise turns from weaker open-weight models.
+    ///
+    /// **Default: false** in v5.6.0. Flip ON in v5.7.0 after telemetry
+    /// confirms <2% trigger rate on flagship models. Users running weak
+    /// local models (Qwen 27B / 35B-A3B, etc.) can opt in immediately.
+    ///
+    /// Per the One Model Rule (`feedback_one_model_rule.md`), the audit
+    /// uses the same active provider+model — no cheap-classifier fallback.
+    #[serde(default)]
+    pub self_audit_enabled: bool,
 }
 
 impl Default for AgentConfig {
@@ -874,6 +887,7 @@ impl Default for AgentConfig {
             max_spend_usd: 0.0,
             v2_optimizations: true,
             parallel_phases: false,
+            self_audit_enabled: false,
         }
     }
 }

@@ -99,31 +99,68 @@ impl Tool for FileReadTool {
 
                 // Apply offset (1-indexed) and limit
                 let start = (offset - 1).min(total_lines);
-                let end = (start + limit).min(total_lines);
-                let selected = &lines[start..end];
+                let line_end = (start + limit).min(total_lines);
+                let selected = &lines[start..line_end];
 
                 // Format with line numbers
-                let mut output = String::new();
+                let mut body = String::new();
                 for (i, line) in selected.iter().enumerate() {
                     let line_num = start + i + 1;
-                    output.push_str(&format!("{}\t{}\n", line_num, line));
+                    body.push_str(&format!("{}\t{}\n", line_num, line));
                 }
 
-                // Check byte size limit (safe UTF-8 boundary)
-                if output.len() > MAX_READ_SIZE {
-                    let mut end = MAX_READ_SIZE;
-                    while end > 0 && !output.is_char_boundary(end) {
-                        end -= 1;
+                // Check byte size limit (safe UTF-8 boundary). When the
+                // truncation fires, recompute the actual last line emitted
+                // by counting newlines in the truncated buffer — this keeps
+                // the header/footer offset hint mathematically correct even
+                // when the cap fires mid-line.
+                let mut byte_capped = false;
+                if body.len() > MAX_READ_SIZE {
+                    let mut cut = MAX_READ_SIZE;
+                    while cut > 0 && !body.is_char_boundary(cut) {
+                        cut -= 1;
                     }
-                    output.truncate(end);
-                    output.push_str("\n... [output truncated at 32KB]");
+                    body.truncate(cut);
+                    byte_capped = true;
                 }
 
-                // Add metadata if partial read
-                if end < total_lines {
+                // Compute the actual last line number that appears in the
+                // output. For line-limit truncation this is `line_end`. For
+                // byte-cap truncation we count complete newlines in the
+                // truncated body (an incomplete trailing line doesn't count).
+                let actual_end_line = if byte_capped {
+                    let nl_count = body.matches('\n').count();
+                    start + nl_count
+                } else {
+                    line_end
+                };
+
+                let truncated = byte_capped || line_end < total_lines;
+
+                // Build output: optional header + body + optional footer.
+                // Header lets weak models notice truncation BEFORE reading
+                // 32KB of content; footer keeps backward-compatible signal
+                // for any tooling that scans for it.
+                let mut output = String::new();
+                if truncated {
+                    output.push_str(&format!(
+                        "[TRUNCATED — showing lines {}-{} of {} total. To continue, call file_read with offset={}]\n",
+                        start + 1,
+                        actual_end_line,
+                        total_lines,
+                        actual_end_line + 1,
+                    ));
+                }
+                output.push_str(&body);
+                if truncated {
+                    if byte_capped {
+                        output.push_str("\n... [output truncated at 32KB]");
+                    }
                     output.push_str(&format!(
                         "\n[Showing lines {}-{} of {} total]",
-                        offset, end, total_lines
+                        start + 1,
+                        actual_end_line,
+                        total_lines
                     ));
                 }
 
@@ -428,4 +465,148 @@ pub(crate) fn resolve_path(
     }
 
     Ok(resolved_canonical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    fn make_ctx(workspace: &std::path::Path) -> ToolContext {
+        ToolContext {
+            workspace_path: workspace.to_path_buf(),
+            session_id: "test-session".to_string(),
+            chat_id: "test-chat".to_string(),
+            read_tracker: Some(Arc::new(RwLock::new(std::collections::HashSet::new()))),
+        }
+    }
+
+    async fn read_file(workspace: &std::path::Path, path: &str, args: serde_json::Value) -> String {
+        let tool = FileReadTool::new();
+        let ctx = make_ctx(workspace);
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("path".into(), serde_json::Value::String(path.to_string()));
+        if let serde_json::Value::Object(extra) = args {
+            for (k, v) in extra {
+                arguments.insert(k, v);
+            }
+        }
+        let input = ToolInput {
+            name: "file_read".to_string(),
+            arguments: serde_json::Value::Object(arguments),
+        };
+        let out = tool.execute(input, &ctx).await.expect("read ok");
+        assert!(!out.is_error, "read returned error: {}", out.content);
+        out.content
+    }
+
+    #[tokio::test]
+    async fn truncation_header_appears_on_line_limit() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("big.txt");
+        let content: String = (1..=5000).map(|i| format!("line {i}\n")).collect();
+        tokio::fs::write(&path, &content).await.unwrap();
+        let out = read_file(dir.path(), "big.txt", serde_json::json!({"limit": 100})).await;
+        assert!(
+            out.starts_with("[TRUNCATED — showing lines 1-100 of 5000 total. To continue, call file_read with offset=101]"),
+            "header missing: {}",
+            &out[..200.min(out.len())]
+        );
+        assert!(
+            out.contains("[Showing lines 1-100 of 5000 total]"),
+            "footer missing"
+        );
+        assert!(out.contains("1\tline 1"), "first line missing");
+        assert!(out.contains("100\tline 100"), "last selected line missing");
+        assert!(!out.contains("101\t"), "should not include line 101");
+    }
+
+    #[tokio::test]
+    async fn truncation_header_appears_on_byte_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("wide.txt");
+        // 500 lines of 100 chars each ≈ 50KB; well over the 32KB cap.
+        let line: String = "x".repeat(100);
+        let content: String = (1..=500).map(|i| format!("{i:04} {line}\n")).collect();
+        tokio::fs::write(&path, &content).await.unwrap();
+        let out = read_file(dir.path(), "wide.txt", serde_json::json!({})).await;
+        assert!(
+            out.starts_with("[TRUNCATED —"),
+            "header missing on byte cap"
+        );
+        assert!(
+            out.contains("of 500 total"),
+            "header should reference total=500"
+        );
+        assert!(
+            out.contains("[output truncated at 32KB]"),
+            "byte-cap footer missing"
+        );
+        assert!(
+            out.contains("[Showing lines 1-"),
+            "partial-read footer missing on byte cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_truncation_no_header() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("small.txt");
+        tokio::fs::write(&path, "hello\nworld\n").await.unwrap();
+        let out = read_file(dir.path(), "small.txt", serde_json::json!({})).await;
+        assert!(!out.starts_with("[TRUNCATED"), "header should not appear");
+        assert!(!out.contains("[Showing lines"), "footer should not appear");
+        assert!(
+            !out.contains("[output truncated at 32KB]"),
+            "byte-cap marker should not appear"
+        );
+        assert!(out.contains("1\thello"));
+        assert!(out.contains("2\tworld"));
+    }
+
+    #[tokio::test]
+    async fn byte_cap_offset_math_correct() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("offsetcheck.txt");
+        // Each formatted line = ~100 bytes. 500 lines ≈ 50KB > 32KB cap.
+        let line: String = "y".repeat(95);
+        let content: String = (1..=500).map(|i| format!("{i:04} {line}\n")).collect();
+        tokio::fs::write(&path, &content).await.unwrap();
+        let out = read_file(dir.path(), "offsetcheck.txt", serde_json::json!({})).await;
+
+        // Parse "showing lines 1-N" to get N.
+        let header = out.lines().next().unwrap();
+        let n_str = header
+            .split("showing lines 1-")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .expect("header should have line range");
+        let n: usize = n_str.parse().expect("N should be numeric");
+        assert!(n > 0 && n < 500, "expected truncation in middle: N={n}");
+
+        // Verify the offset hint = N+1.
+        let expected_offset = format!("offset={}", n + 1);
+        assert!(
+            header.contains(&expected_offset),
+            "offset hint should be N+1 ({}); got header: {}",
+            expected_offset,
+            header
+        );
+
+        // Verify the body actually contains line N but not line N+1.
+        let line_n_marker = format!("\n{:04} ", n);
+        let line_np1_marker = format!("\n{:04} ", n + 1);
+        // First line in body has no leading newline; check both forms.
+        assert!(
+            out.contains(&line_n_marker) || out.contains(&format!("{:04} ", n)),
+            "body should contain line {n}"
+        );
+        assert!(
+            !out.contains(&line_np1_marker),
+            "body should NOT contain line {} (was truncated)",
+            n + 1
+        );
+    }
 }
