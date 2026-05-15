@@ -7106,6 +7106,8 @@ Just type a message to chat with the AI agent.",
                          /browser forget <service> — Delete a saved session\n\
                          /vigil — Bug reporter status and configuration\n\
                          /addkey github — Add GitHub PAT for auto vigil\n\
+                         /paste — Begin multi-line input (newlines and indentation preserved)\n\
+                         /send — Submit the paste buffer as one message\n\
                          /quit — Exit the CLI chat\n\n\
                          Just type a message to chat with the AI agent.\n",
                         env!("CARGO_PKG_VERSION"),
